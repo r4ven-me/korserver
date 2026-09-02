@@ -1,60 +1,61 @@
 # Korvus Server
 
-Korvus Server (`korserver`) - Python-first платформа управления OpenConnect/ocserv VPN в Docker.
-Проект рассчитан на два режима:
+Korvus Server (`korserver`) is a Python-first management platform for OpenConnect/ocserv
+VPN in Docker. The project supports two modes:
 
-- обычный OpenConnect VPN server на базе `ocserv`;
-- middle-server режим, где контейнер дополнительно поднимает исходящее подключение
-  `openconnect` к закрытому контуру и маршрутизирует выбранный трафик клиентов.
+- a regular OpenConnect VPN server built on `ocserv`;
+- middle-server mode, where the container additionally dials an outbound `openconnect`
+  connection into a private network and routes selected client traffic through it.
 
-CLI является основным интерфейсом и работает всегда. Web API/GUI опциональны и по
-умолчанию выключены.
+The CLI is the primary interface and always works. The Web API/GUI are optional and
+disabled by default.
 
-## Возможности
+## Features
 
 - typed Python backend: FastAPI, Typer, Pydantic v2, Jinja2;
-- YAML-first конфигурация;
-- переопределения через `.env` и переменные окружения;
-- приоритет настроек: CLI overrides -> environment -> `.env` -> YAML -> defaults;
-- генерация `ocserv.conf`, `dnsmasq.conf`, `nftables.nft`, `supervisor.conf`;
-- idempotent runtime initialization: недостающие конфиги и auto-сертификаты создаются
-  при старте контейнера;
-- atomic writes для generated files и secret/runtime файлов;
-- централизованная маскировка секретов в CLI/API/log-related выводах;
-- управление пользователями, паролями, сертификатами, PKCS#12, OTP;
-- команды для sessions, upstream profiles, split routes/domains, nftables и диагностики;
-- multi-stage Dockerfile с frontend/backend test stages;
-- compose-файл с `/dev/net/tun`, `NET_ADMIN`, `NET_RAW` и persistent volumes.
+- YAML-first configuration;
+- overrides via `.env` and environment variables;
+- settings precedence: CLI overrides -> environment -> `.env` -> YAML -> defaults;
+- generates `ocserv.conf`, `dnsmasq.conf`, `nftables.nft`, `supervisor.conf`;
+- idempotent runtime initialization: missing configs and auto-certificates are created
+  on container start;
+- atomic writes for generated files and secret/runtime files;
+- centralized secret masking in CLI/API/log-related output;
+- manages users, passwords, certificates, PKCS#12, OTP;
+- commands for sessions, upstream profiles, split routes/domains, nftables and
+  diagnostics;
+- multi-stage Dockerfile with frontend/backend test stages;
+- compose file with `/dev/net/tun`, `NET_ADMIN`, `NET_RAW` and persistent volumes.
 
 ## Korvus Client
 
-В директории [`korclient/`](korclient/README.md) находится сопутствующий проект клиента:
-OpenConnect-клиент в Docker с двумя режимами — full tunnel и split routing. Списки
-маршрутов (`route =`) и доменов (`split-dns =`) задаются централизованно в веб-панели
-korserver (per-user / per-group конфиги ocserv) и доставляются клиенту стандартным
-AnyConnect-хендшейком при подключении; отдельный сервис синхронизации не требуется.
-Сборка и публикация: `make client-docker-build`, `make client-docker-release`.
+[Korvus Client](https://github.com/r4ven-me/korclient) is the companion client project,
+in its own repository: an OpenConnect client in Docker with two modes - full tunnel and
+split routing. Route (`route =`) and domain (`split-dns =`) lists are configured
+centrally in the korserver web panel (per-user / per-group ocserv configs) and delivered
+to the client through the standard AnyConnect handshake on connect; no separate sync
+service is required.
 
-## Требования
+## Requirements
 
-Для Docker-запуска нужен Linux-хост с:
+Running in Docker requires a Linux host with:
 
-- Docker Engine и Docker Compose plugin;
-- доступным `/dev/net/tun`;
-- правом запускать контейнеры с `NET_ADMIN` и `NET_RAW`;
-- свободными портами `443/tcp` и `443/udp`, если используется стандартный VPN-порт.
+- Docker Engine and the Docker Compose plugin;
+- `/dev/net/tun` available;
+- permission to run containers with `NET_ADMIN` and `NET_RAW`;
+- free ports `443/tcp` and `443/udp` if using the standard VPN port.
 
-Проверка TUN на хосте:
+Check TUN on the host:
 
 ```bash
 test -c /dev/net/tun && echo "tun ok"
 ```
 
-Rootless Docker обычно не подходит для полноценной VPN-сетевой части.
+Rootless Docker generally isn't suitable for the full VPN networking stack.
 
-## Быстрый Старт
+## Quick Start
 
-Соберите образ, подготовьте конфиги и запустите контейнер:
+Build the image, prepare the configs and start the container:
 
 ```bash
 make docker-build
@@ -64,7 +65,7 @@ cp .env.example .env
 docker compose up -d
 ```
 
-Проверьте состояние:
+Check the status:
 
 ```bash
 docker compose ps
@@ -72,62 +73,63 @@ docker compose logs -f korserver
 docker compose exec korserver korctl server status
 ```
 
-Ожидаемые признаки успешного старта:
+Expected signs of a successful start:
 
-- контейнер в состоянии `healthy` или `running`;
-- в логах есть `ocserv entered RUNNING state`;
-- `korctl server status` показывает `ocserv RUNNING`;
-- `ocserv` слушает `0.0.0.0:443` по TCP и UDP.
+- the container is `healthy` or `running`;
+- the logs contain `ocserv entered RUNNING state`;
+- `korctl server status` shows `ocserv RUNNING`;
+- `ocserv` listens on `0.0.0.0:443` over TCP and UDP.
 
-Проверка слушающих портов внутри контейнера:
+Check listening ports inside the container:
 
 ```bash
 docker compose exec korserver sh -lc 'ss -lntup | grep 443'
 ```
 
-Default `compose.yaml` публикует только VPN-порты. Web API/GUI отключены и порт `8443`
-не публикуется, поэтому `curl 127.0.0.1:8443` в обычном режиме не является проверкой
-VPN-сервера. Для проверки Web используйте отдельный override из раздела "Web API И GUI".
+The default `compose.yaml` only publishes the VPN ports. The Web API/GUI are disabled
+and port `8443` isn't published, so `curl 127.0.0.1:8443` isn't a valid check of the VPN
+server under normal operation. To check the Web component, use the separate override
+described in "Web API and GUI".
 
-Остановка:
+Stop:
 
 ```bash
 docker compose down
 ```
 
-Полное удаление runtime данных вручную не выполняется проектом автоматически. Если нужно
-начать с нуля, удаляйте локальные volume-директории явно:
+The project never deletes runtime data automatically. To start fresh, remove the local
+volume directories explicitly:
 
 ```bash
 docker compose down
 rm -rf data logs
 ```
 
-## Структура Директорий
+## Directory Structure
 
-Основные файлы:
+Key files:
 
 - `backend/korserver/` - Python package, CLI, API, config models, services, renderers;
 - `frontend/` - Vite/React/TypeScript GUI source;
-- `templates/` - Jinja2 templates для generated system configs;
+- `templates/` - Jinja2 templates for generated system configs;
 - `tests/` - pytest coverage;
-- `docs/` - дополнительные заметки по архитектуре, безопасности, сети и Docker;
-- `examples/` - минимальная, полная и middle-server конфигурации;
-- `Dockerfile` - frontend/backend test stages и runtime image;
-- `compose.yaml` - production-like запуск контейнера;
-- `config.example.yaml` - основной пример YAML-конфига;
-- `.env.example` - пример env overrides и secret values;
-- `Makefile` - локальные и Docker-команды проверки.
+- `docs/` - additional notes on architecture, security, networking and Docker;
+- `examples/` - minimal, full and middle-server configurations;
+- `Dockerfile` - frontend/backend test stages and the runtime image;
+- `compose.yaml` - production-like container startup;
+- `config.example.yaml` - main example YAML config;
+- `.env.example` - example env overrides and secret values;
+- `Makefile` - local and Docker check commands.
 
-Runtime volumes при `docker compose up`:
+Runtime volumes for `docker compose up`:
 
-- `./config:/etc/korserver` - пользовательская конфигурация;
+- `./config:/etc/korserver` - user configuration;
 - `./data:/var/lib/korserver` - generated configs, secrets, certs, route/domain files;
 - `./logs:/var/log/korserver` - runtime logs.
 
-Важные runtime пути внутри контейнера:
+Key runtime paths inside the container:
 
-- `/etc/korserver/config.yaml` - основной YAML config;
+- `/etc/korserver/config.yaml` - main YAML config;
 - `/var/lib/korserver/generated/ocserv.conf` - rendered ocserv config;
 - `/var/lib/korserver/generated/supervisor.conf` - rendered supervisor config;
 - `/var/lib/korserver/secrets/ocpasswd` - password auth database;
@@ -135,9 +137,9 @@ Runtime volumes при `docker compose up`:
 - `/var/lib/korserver/certs/` - CA/server/user certificates;
 - `/var/log/korserver/` - application/supervisor logs.
 
-## Сборка И Проверки
+## Build and Checks
 
-CI-friendly проверки:
+CI-friendly checks:
 
 ```bash
 make docker-test
@@ -145,12 +147,12 @@ make docker-build
 make docker-cli-check
 ```
 
-`make docker-test` собирает два test stage:
+`make docker-test` builds two test stages:
 
 - `frontend-test`: `npm ci`, `npm audit --audit-level=moderate`, production build;
 - `backend-test`: install `.[dev]`, `ruff`, `mypy`, `pytest`, dry-run render.
 
-Локальная разработка backend:
+Local backend development:
 
 ```bash
 python -m venv .venv
@@ -159,22 +161,22 @@ make check
 make render
 ```
 
-Локальная сборка frontend:
+Local frontend build:
 
 ```bash
 make frontend-build
 make frontend-audit
 ```
 
-## Конфигурация
+## Configuration
 
-Основной файл - YAML:
+The main file is YAML:
 
 ```bash
 cp config.example.yaml config/config.yaml
 ```
 
-Минимальный рабочий VPN config:
+Minimal working VPN config:
 
 ```yaml
 system:
@@ -225,38 +227,38 @@ web:
   enabled: false
 ```
 
-Проверка YAML без записи файлов:
+Validate the YAML without writing files:
 
 ```bash
 docker compose run --rm --entrypoint korctl korserver \
   --config /etc/korserver/config.yaml config validate
 ```
 
-Просмотр rendered конфигов без записи:
+Preview rendered configs without writing:
 
 ```bash
 docker compose run --rm --entrypoint korctl korserver \
   --config /etc/korserver/config.yaml config render --dry-run
 ```
 
-Запись rendered конфигов:
+Write the rendered configs:
 
 ```bash
 docker compose exec korserver korctl config render
 ```
 
-Diff между текущими generated файлами и новым render:
+Diff between the current generated files and a fresh render:
 
 ```bash
 docker compose exec korserver korctl config diff
 ```
 
-## Env Overrides И Secrets
+## Env Overrides and Secrets
 
-Любое поле YAML можно переопределить переменной окружения с префиксом `KORSERVER_`.
-Это совместимый runtime namespace, оставленный от ранней версии проекта: публичная
-утилита называется `korctl`, а продукт - Korvus Server.
-Вложенность задается через двойное подчеркивание:
+Any YAML field can be overridden with an environment variable prefixed with
+`KORSERVER_`. This is a compatibility runtime namespace kept from an earlier version of
+the project: the public utility is called `korctl`, while the product is Korvus Server.
+Nesting is expressed with a double underscore:
 
 ```env
 KORSERVER_SERVER__PORT=4443
@@ -264,20 +266,21 @@ KORSERVER_SERVER__DNS='["1.1.1.1", "9.9.9.9"]'
 KORSERVER_WEB__ENABLED=false
 ```
 
-Списки передаются JSON-строкой.
+Lists are passed as a JSON string.
 
-Переменные `KORSERVER_*` без `__` не считаются config overrides. Их можно использовать как
-обычные secret values, например `KORSERVER_ADMIN_PASSWORD` для `${SECRET:KORSERVER_ADMIN_PASSWORD}`.
+`KORSERVER_*` variables without `__` aren't treated as config overrides. You can use
+them as plain secret values, e.g. `KORSERVER_ADMIN_PASSWORD` for
+`${SECRET:KORSERVER_ADMIN_PASSWORD}`.
 
-`.env` поддерживает обычный `KEY=value`, необязательный префикс `export`, quoted values и
-inline-комментарии после unquoted values:
+`.env` supports plain `KEY=value`, an optional `export` prefix, quoted values and
+inline comments after unquoted values:
 
 ```env
 export KORSERVER_SERVER__REALM="Corp # VPN"
 KORSERVER_SERVER__CN=vpn.example.com # comment
 ```
 
-Секреты можно хранить в `.env` и ссылаться на них из YAML через `${SECRET:NAME}`:
+Secrets can be kept in `.env` and referenced from YAML with `${SECRET:NAME}`:
 
 ```yaml
 upstream:
@@ -294,18 +297,18 @@ upstream:
 PRIVATE_MAIN_PASSWORD=change-me
 ```
 
-Секреты не должны попадать в README, issue, shell history и логи. CLI/API маскируют
-известные secret values и строки вида `password=...`, `token=...`, `secret=...`.
+Secrets must never end up in the README, issues, shell history or logs. The CLI/API
+mask known secret values and strings like `password=...`, `token=...`, `secret=...`.
 
-## Управление Korvus Server
+## Managing Korvus Server
 
-Статус:
+Status:
 
 ```bash
 docker compose exec korserver korctl server status
 ```
 
-Reload `ocserv` через `korctl`:
+Reload `ocserv` via `korctl`:
 
 ```bash
 docker compose exec korserver korctl server reload
@@ -317,22 +320,22 @@ Dry-run reload:
 docker compose exec korserver korctl server reload --dry-run
 ```
 
-`reload` отправляет `SIGHUP` в `ocserv`. Этого достаточно для части изменений, но не все
-параметры ocserv применяются через HUP. Если после render/reload поведение не изменилось,
-выполните полный restart только процесса `ocserv` без перезапуска контейнера:
+`reload` sends `SIGHUP` to `ocserv`. That's enough for some changes, but not every
+ocserv setting is applied via HUP. If behavior doesn't change after render/reload,
+fully restart just the `ocserv` process without restarting the container:
 
 ```bash
 docker compose exec korserver korctl server restart
 docker compose exec korserver korctl server restart --dry-run
 ```
 
-Остановить managed processes внутри контейнера:
+Stop the managed processes inside the container:
 
 ```bash
 docker compose exec korserver korctl server stop
 ```
 
-Управление отдельными runtime-процессами supervisor через основную утилиту:
+Manage individual supervisor runtime processes through the main utility:
 
 ```bash
 docker compose exec korserver korctl server process list
@@ -340,93 +343,98 @@ docker compose exec korserver korctl server process restart dnsmasq
 docker compose exec korserver korctl server process status certbot-renew
 ```
 
-Обычно для эксплуатации лучше управлять контейнером через Compose:
+For day-to-day operation it's usually better to manage the container through Compose:
 
 ```bash
 docker compose restart korserver
 docker compose logs -f korserver
 ```
 
-## Пользователи И Пароли
+## Users and Passwords
 
-Создать пользователя password-auth:
+Create a password-auth user:
 
 ```bash
 docker compose exec korserver korctl user create alice
 ```
 
-CLI спросит пароль интерактивно и не выведет его в терминал.
+The CLI prompts for the password interactively and never echoes it.
 
-Список пользователей:
+List users:
 
 ```bash
 docker compose exec korserver korctl user list
 ```
 
-Сменить пароль:
+Change a password:
 
 ```bash
 docker compose exec korserver korctl user passwd alice
 ```
 
-Отключить/включить пользователя:
+Disable/enable a user:
 
 ```bash
 docker compose exec korserver korctl user disable alice
 docker compose exec korserver korctl user enable alice
 ```
 
-Удалить пользователя:
+Delete a user:
 
 ```bash
 docker compose exec korserver korctl user delete alice
 ```
 
-Без интерактивного подтверждения:
+Without an interactive confirmation:
 
 ```bash
 docker compose exec korserver korctl user delete alice --yes
 ```
 
-После изменения пользователей обычно достаточно reload:
+A reload is usually enough after changing users:
 
 ```bash
 docker compose exec korserver korctl server reload
 ```
 
-## Сертификаты И PKCS#12
+## Certificates and PKCS#12
 
-В режиме:
+In:
 
 ```yaml
 certificates:
   mode: auto
 ```
 
-контейнер при первом старте создает CA и server certificate, если их еще нет.
+the container creates a CA and server certificate on first start if they don't already
+exist.
 
-Для серверного TLS-сертификата доступны три практических сценария:
+Three practical scenarios are available for the server TLS certificate:
 
-- `auto`: локальный CA и server certificate создаются внутри persistent volume;
-- ручная загрузка через GUI: файлы сохраняются в `data/certs/external/`, конфиг переключается на `certificates.mode: external`;
-- Let's Encrypt через GUI или CLI: используется `certbot certonly --standalone`, активные пути переключаются на persistent `data/certbot/config/live/<domain>/`.
+- `auto`: a local CA and server certificate are created inside the persistent volume;
+- manual upload through the GUI: files are saved to `data/certs/external/`, the config
+  switches to `certificates.mode: external`;
+- Let's Encrypt through the GUI or CLI: uses `certbot certonly --standalone`, the active
+  paths switch to the persistent `data/certbot/config/live/<domain>/`.
 
-Для Let's Encrypt HTTP-01 порт `80/tcp` должен быть доступен извне и указывать на контейнер.
-Если `certificates.letsencrypt.enabled: true`, Korvus Server пытается получить сертификат
-при старте до запуска `ocserv`, чтобы первый VPN/Web TLS startup уже мог использовать
-валидную цепочку. Ошибка certbot при старте логируется и не должна уронить контейнер:
-смотрите `/var/log/korserver/startup.log` и `/var/log/korserver/certbot/letsencrypt.log`.
-После ручной загрузки, выпуска или renew панель рендерит актуальный `ocserv.conf` и может
-сразу выполнить reload или restart `ocserv`.
+For Let's Encrypt, HTTP-01 port `80/tcp` must be reachable from outside and point at the
+container. If `certificates.letsencrypt.enabled: true`, Korvus Server tries to obtain a
+certificate on startup before `ocserv` starts, so the first VPN/Web TLS startup can
+already use a valid chain. A certbot error at startup is logged and shouldn't crash the
+container: see `/var/log/korserver/startup.log` and
+`/var/log/korserver/certbot/letsencrypt.log`. After a manual upload, issue or renew, the
+panel renders an up-to-date `ocserv.conf` and can immediately reload or restart
+`ocserv`.
 
-Пути:
+Paths:
 
 - CA: `data/certs/ca.crt`, `data/certs/ca.key`;
 - server cert/key: `data/certs/server.crt`, `data/certs/server.key`;
-- external server cert/key/chain: `data/certs/external/server.crt`, `server.key`, `ca.crt`;
+- external server cert/key/chain: `data/certs/external/server.crt`, `server.key`,
+  `ca.crt`;
 - user certs: `data/certs/users/<username>.crt`, `.key`, `.p12`.
 
-Включение certificate auth:
+Enable certificate auth:
 
 ```yaml
 auth:
@@ -436,21 +444,21 @@ auth:
     enabled: true
 ```
 
-Создать клиентский сертификат:
+Create a client certificate:
 
 ```bash
 docker compose exec korserver korctl user cert create alice
 ```
 
-Создать PKCS#12 bundle:
+Create a PKCS#12 bundle:
 
 ```bash
 docker compose exec korserver korctl user p12 create alice
 ```
 
-Команда поддерживает passphrase через `--passphrase VALUE`. Не передавайте реальный
-passphrase через shell history на production-хосте; для теста можно использовать временное
-значение, а в эксплуатации лучше подключить безопасный ввод/secret wrapper.
+The command supports a passphrase via `--passphrase VALUE`. Don't pass a real
+passphrase through shell history on a production host; a temporary value is fine for
+testing, and production should use a secure input/secret wrapper instead.
 
 ```bash
 docker compose exec korserver korctl user p12 create alice --passphrase "$KORSERVER_P12_PASSPHRASE"
@@ -462,7 +470,7 @@ Apple-compatible PKCS#12:
 docker compose exec korserver korctl user p12 create alice --apple-compatible
 ```
 
-Отозвать сертификат и сгенерировать CRL:
+Revoke a certificate and generate a CRL:
 
 ```bash
 docker compose exec korserver korctl user cert revoke alice
@@ -470,7 +478,7 @@ docker compose exec korserver korctl user cert revoke alice
 
 ## OTP
 
-Включите OTP в YAML:
+Enable OTP in YAML:
 
 ```yaml
 auth:
@@ -484,39 +492,38 @@ auth:
     issuer: Korvus Server
 ```
 
-`enabled` включает управление OTP-секретами в CLI/API/GUI. `ocserv_oath_auth` добавляет
-`auth = "oath[...]"` в `ocserv.conf`; включайте его только если ваша сборка `ocserv`
-поддерживает OATH backend, иначе сервер не сможет стартовать.
+`enabled` turns on OTP secret management in the CLI/API/GUI. `ocserv_oath_auth` adds
+`auth = "oath[...]"` to `ocserv.conf`; only enable it if your `ocserv` build supports
+the OATH backend, otherwise the server won't be able to start.
 
-Включить OTP для пользователя:
+Enable OTP for a user:
 
 ```bash
 docker compose exec korserver korctl user otp enable alice
 ```
 
-Показать QR в терминале:
+Show the QR code in the terminal:
 
 ```bash
 docker compose exec korserver korctl user otp show-qr alice
 ```
 
-Отключить OTP:
+Disable OTP:
 
 ```bash
 docker compose exec korserver korctl user otp disable alice
 ```
 
-OTP secrets хранятся в `data/secrets/users.oath`.
+OTP secrets are stored in `data/secrets/users.oath`.
 
 ## OIDC / Identity
 
-ocserv не умеет нативный browser redirect OIDC flow для VPN-клиентов. Korvus Server
-добавляет identity-модель для Keycloak/authentik-подобных IdP, генерирует ocserv
-`config-per-group` и подключает реальную VPN-аутентификацию через PAM или RADIUS bridge.
-Используйте PAM/RADIUS integration или outpost/proxy, который возвращает совместимые
-с ocserv users/groups.
+`ocserv` has no native browser-redirect OIDC flow for VPN clients. Korvus Server adds
+an identity model for Keycloak/Authentik-like IdPs, generates ocserv `config-per-group`
+files and hooks up real VPN authentication through a PAM or RADIUS bridge. Use a
+PAM/RADIUS integration, or an outpost/proxy that returns ocserv-compatible users/groups.
 
-Пример YAML:
+Example YAML:
 
 ```yaml
 auth:
@@ -565,18 +572,18 @@ korctl identity oidc provider-set keycloak \
 korctl identity group set --file group-devops.yaml
 ```
 
-GUI: вкладка `Identity` управляет connector settings, OIDC providers и group policies.
-API/GUI не возвращают `client_secret`; храните его через `${SECRET:OIDC_CLIENT_SECRET}`.
+GUI: the `Identity` tab manages connector settings, OIDC providers and group policies.
+The API/GUI never return `client_secret`; keep it in `${SECRET:OIDC_CLIENT_SECRET}`.
 
 ## Sessions
 
-Список активных сессий через `occtl`:
+List active sessions via `occtl`:
 
 ```bash
 docker compose exec korserver korctl sessions list
 ```
 
-Отключить пользователя:
+Kick a user:
 
 ```bash
 docker compose exec korserver korctl sessions kick alice
@@ -588,29 +595,30 @@ Dry-run:
 docker compose exec korserver korctl sessions kick alice --dry-run
 ```
 
-## Routing, Firewall/NAT, Split Routes И Domains
+## Routing, Firewall/NAT, Split Routes and Domains
 
-Этот раздел управляет тем, как **сам сервер** отправляет трафик VPN-клиентов дальше —
-не тем, что ocserv пушит клиентам (это отдельные `server.routes`/`no_routes`). Сервер
-может выходить в сеть просто через хост, а может — через upstream-туннель (см.
-"Middle-Server Режим" ниже); режимы решают, что именно из этого происходит. В вебе
-эти настройки живут во вкладке "Upstream" (не отдельной вкладкой), потому что имеют
-смысл только вместе.
+This section controls how **the server itself** sends VPN client traffic onward - not
+what ocserv pushes to clients (that's the separate `server.routes`/`no_routes`). The
+server can just exit through the host, or through an upstream tunnel (see "Middle-Server
+Mode" below); the modes decide which of these actually happens. In the web panel these
+settings live under the "Upstream" tab (not a tab of their own), because they only mean
+anything together.
 
-Режимы:
+Modes:
 
-- `direct` - Korvus Server не управляет NAT/forwarding правилами вообще;
-- `full` - весь трафик VPN-клиентов помечается и форсируется через upstream-интерфейс
-  отдельной policy-routing таблицей; если upstream включён, но недоступен — трафик
-  блокируется firewall-правилом (kill-switch), а не утекает напрямую с хоста;
-- `split` - тем же способом форсируются только перечисленные ниже routes/domains;
-  остальной трафик NAT'ится через хост как обычно.
+- `direct` - Korvus Server doesn't manage any NAT/forwarding rules at all;
+- `full` - all VPN client traffic is marked and forced through the upstream interface
+  via a dedicated policy-routing table; if upstream is enabled but unreachable, that
+  traffic is blocked by a firewall rule (kill-switch) instead of leaking out directly
+  from the host;
+- `split` - only the routes/domains listed below are forced the same way; everything
+  else is NAT'd through the host as usual.
 
-Без активного upstream (`upstream.enabled: false`) `full`/`split` просто NAT'ят
-VPN-подсеть через `main_interface` (или через любой интерфейс, если `main_interface:
-auto`) — no kill-switch, обычный masquerade.
+Without an active upstream (`upstream.enabled: false`), `full`/`split` simply NAT the
+VPN subnet through `main_interface` (or any interface, if `main_interface: auto`) - no
+kill-switch, just plain masquerading.
 
-Пример split config:
+Example split config:
 
 ```yaml
 routing:
@@ -630,10 +638,10 @@ routing:
       - corp.example.com
 ```
 
-Отдельного списка "ips" нет — одиночный хост это просто маршрут с маской /32
-(`10.11.11.1` эквивалентно `10.11.11.1/32`), `routes` принимает и то, и другое.
+There's no separate "ips" list - a single host is just a route with a /32 mask
+(`10.11.11.1` is equivalent to `10.11.11.1/32`), `routes` accepts both.
 
-Команды routes:
+Route commands:
 
 ```bash
 docker compose exec korserver korctl routes list
@@ -642,7 +650,7 @@ docker compose exec korserver korctl routes delete 192.168.25.0/24
 docker compose exec korserver korctl routes reload --dry-run
 ```
 
-Команды domains:
+Domain commands:
 
 ```bash
 docker compose exec korserver korctl domains list
@@ -651,46 +659,46 @@ docker compose exec korserver korctl domains delete corp.example.com
 docker compose exec korserver korctl domains reload --dry-run
 ```
 
-`routes add/delete` и `domains add/delete` работают с runtime files:
+`routes add/delete` and `domains add/delete` work on runtime files:
 
 - `data/routes.txt`;
 - `data/domains.txt`.
 
-Опасные сетевые изменения проверяйте через dry-run:
+Check risky network changes with dry-run first:
 
 ```bash
 docker compose exec korserver korctl nft apply --dry-run
 docker compose exec korserver korctl nft cleanup --dry-run
 ```
 
-Применить firewall/NAT rules:
+Apply firewall/NAT rules:
 
 ```bash
 docker compose exec korserver korctl nft apply
 ```
 
-Эта команда рендерит project-owned nftables state из текущего конфига и применяет его
-через `nft -f /var/lib/korserver/generated/nftables.nft`. Она не делает глобальный
-`flush ruleset` и не управляет чужими firewall-правилами. В GUI та же операция называется
-`Apply firewall/NAT`.
+This command renders the project-owned nftables state from the current config and
+applies it via `nft -f /var/lib/korserver/generated/nftables.nft`. It never does a
+global `flush ruleset` and never manages anyone else's firewall rules. In the GUI the
+same operation is called `Apply firewall/NAT`.
 
-Показать nftables state:
+Show the nftables state:
 
 ```bash
 docker compose exec korserver korctl nft show
 ```
 
-Очистить project-owned nftables state:
+Clean up the project-owned nftables state:
 
 ```bash
 docker compose exec korserver korctl nft cleanup
 ```
 
-Проект генерирует только project-owned tables с prefix из `routing.nft_prefix` и не делает
-глобальный `flush ruleset`. Если `nft apply` внутри контейнера завершается `returncode: -11`
-или `signal 11`, а та же команда работает на хосте, это обычно несовместимость userspace
-пакета `nft` в образе с kernel/netfilter stack хоста. Проверьте ровно ту же команду внутри
-контейнера:
+The project only generates project-owned tables with the prefix from
+`routing.nft_prefix` and never does a global `flush ruleset`. If `nft apply` inside the
+container fails with `returncode: -11`/`signal 11` while the same command works on the
+host, that's usually a mismatch between the image's `nft` userspace package and the
+host's kernel/netfilter stack. Check the exact same command inside the container:
 
 ```bash
 docker compose exec korserver nft -f /var/lib/korserver/generated/nftables.nft
@@ -698,15 +706,16 @@ docker compose exec korserver nft --version
 uname -r
 ```
 
-В таком случае лечится не конфигом Korvus Server, а обновлением/заменой nftables userspace
-в образе или подбором базового образа, совместимого с ядром хоста.
+In that case the fix isn't a Korvus Server config change but updating/replacing the
+nftables userspace in the image, or picking a base image compatible with the host's
+kernel.
 
-## Middle-Server Режим
+## Middle-Server Mode
 
-Middle-server режим нужен, когда клиенты подключаются к этому VPN-серверу, а доступ к
-закрытому контуру идет через исходящий OpenConnect tunnel из контейнера.
+Middle-server mode is for when clients connect to this VPN server, and access to a
+private network goes through an outbound OpenConnect tunnel from the container.
 
-Базовый пример:
+Basic example:
 
 ```yaml
 server:
@@ -734,14 +743,22 @@ upstream:
   enabled: true
   interface: oc-middle0
   active_profile: private-main
+  check_interval: 5
+  check_threshold: 3
+  check_settle_seconds: 15
+  failover: true
   profiles:
     - name: private-main
       server: private.example.com
-      port: "443/?secretWord"
+      port: "443"
       auth_type: password
       username: middle-user
       password: "${SECRET:PRIVATE_MAIN_PASSWORD}"
       check_host: 10.11.11.1
+      # Optional: if the upstream server also uses ocserv's camouflage
+      # feature, the client appends it as a "?secret" query, not part of
+      # `port` itself.
+      # camouflage_secret: "${SECRET:PRIVATE_MAIN_CAMOUFLAGE_SECRET}"
 
 routing:
   mode: split
@@ -759,27 +776,27 @@ routing:
       - corp.example.com
 ```
 
-Положите secret в `.env`:
+Put the secret in `.env`:
 
 ```env
 PRIVATE_MAIN_PASSWORD=change-me
 ```
 
-Проверить профили:
+Check the profiles:
 
 ```bash
 docker compose exec korserver korctl upstream list
 docker compose exec korserver korctl upstream status
 ```
 
-Переключить active profile:
+Switch the active profile:
 
 ```bash
 docker compose exec korserver korctl upstream switch private-main
 ```
 
-Подключить/отключить active upstream (openconnect демонизируется после успешного
-подключения, команда возвращается сразу, не дожидаясь разрыва туннеля):
+Connect/disconnect the active upstream (openconnect daemonizes after a successful
+connect, the command returns immediately without waiting for the tunnel to drop):
 
 ```bash
 docker compose exec korserver korctl upstream connect --dry-run
@@ -787,64 +804,67 @@ docker compose exec korserver korctl upstream connect
 docker compose exec korserver korctl upstream disconnect
 ```
 
-`routing.mode: split` (как в примере выше) реально форсирует перечисленные
-routes/domains через upstream-интерфейс отдельной policy-routing таблицей
-(`routing.fwmark`/`routing.table_id`) и включает kill-switch: если upstream
-недоступен, этот трафик не пойдет напрямую с хоста, а будет заблокирован
-firewall-правилом, а не утечет мимо туннеля. `mode: full` — то же самое, но
-для всего трафика клиентов; `mode: direct` отключает эту логику полностью.
-Несколько профилей могут быть подключены **одновременно**: у каждого свой
-tunnel-интерфейс (`profiles[].interface`; без него первый профиль наследует
-`upstream.interface`, следующие получают `oc-up<N>`) и свой pid-файл. Активен
-всегда ровно один — правила перенаправления (nftables oifname + policy route)
-указывают на его туннель. Переключение активного профиля (`korctl upstream
-switch` / кнопка Switch в панели) только переставляет эти правила, само
-соединение не трогается:
+`routing.mode: split` (as in the example above) really forces the listed routes/domains
+through the upstream interface via a dedicated policy-routing table
+(`routing.fwmark`/`routing.table_id`) and turns on the kill-switch: if upstream is
+unreachable, that traffic won't go out directly from the host, it will be blocked by a
+firewall rule instead of leaking past the tunnel. `mode: full` does the same thing but
+for all client traffic; `mode: direct` disables this logic entirely. Several profiles
+can be connected **at the same time**: each has its own tunnel interface
+(`profiles[].interface`; without one, the first profile inherits `upstream.interface`,
+the next ones get `oc-up<N>`) and its own pid file. Exactly one is always active - the
+redirection rules (nftables oifname + policy route) point at its tunnel. Switching the
+active profile (`korctl upstream switch` / the Switch button in the panel) only
+repoints these rules, the connection itself isn't touched:
 
 ```bash
-docker compose exec korserver korctl upstream connect backup   # standby-туннель
-docker compose exec korserver korctl upstream switch backup    # мгновенный переход
+docker compose exec korserver korctl upstream connect backup   # dial a standby tunnel
+docker compose exec korserver korctl upstream switch backup    # instant switch-over
 ```
 
-`upstream.check_interval`/`check_threshold`/`failover` управляют отдельным
-supervisor-процессом `korctl upstream watch`: он пингует `check_host` активного
-профиля и после `check_threshold` неудач сначала переподключается к тому же
-профилю, а если `failover: true` и профилей несколько — по очереди пробует
-следующие; уже подключённый standby-профиль подхватывается простым
-переключением правил, без набора соединения.
+`upstream.check_interval`/`check_threshold`/`failover` drive a separate supervisor
+process, `korctl upstream watch`: it pings the active profile's `check_host` and, after
+`check_threshold` failures, first reconnects to the same profile, then - if `failover:
+true` and there's more than one profile - tries the next ones in turn; an already
+connected standby profile is picked up by simply switching the redirection rules,
+without dialing. `upstream.check_settle_seconds` is a grace window after a successful
+reconnect during which health-check failures aren't counted yet, so a tunnel that just
+came back up (routing/DPD still settling) can't immediately trigger another reconnect
+before it had a chance to prove itself.
 
-Middle-server routing, reconnect/failover и end-to-end доступ к закрытому контуру всё
-равно зависят от реальной сети, upstream сервера и nftables/policy-routing на
-хосте/в контейнере (`NET_ADMIN` обязателен). Перед production включением проверьте
-это на стенде.
+Middle-server routing, reconnect/failover and end-to-end access to the private network
+still depend on the real network, the upstream server, and nftables/policy-routing on
+the host/in the container (`NET_ADMIN` is required). Verify this on a test setup before
+enabling it in production.
 
-## Web API И GUI
+## Web API and GUI
 
-Web отключен по умолчанию:
+Web is disabled by default:
 
 ```yaml
 web:
   enabled: false
 ```
 
-В default `compose.yaml` порт `8443` не публикуется. Это сделано намеренно: CLI остается
-основным интерфейсом, а Web не должен случайно открываться наружу.
+The default `compose.yaml` doesn't publish port `8443`. This is intentional: the CLI
+stays the primary interface, and Web shouldn't accidentally become reachable from
+outside.
 
-Для локальной проверки Web API/GUI используйте override:
+For a local Web API/GUI check, use the override:
 
 ```bash
 docker compose -f compose.yaml -f compose.web.yaml up --build -d
 curl -kfsS https://127.0.0.1:8443/healthz
 ```
 
-`compose.web.yaml` включает Web, заставляет Uvicorn слушать `0.0.0.0` внутри контейнера
-по HTTPS и публикует порт только на loopback хоста: `127.0.0.1:8443`. По умолчанию
-используется auto-сертификат `korserver`; браузер предупредит о частном CA, пока этот CA
-не добавлен в доверенные или не настроен публичный сертификат.
+`compose.web.yaml` enables Web, makes Uvicorn listen on `0.0.0.0` inside the container
+over HTTPS, and only publishes the port on the host's loopback: `127.0.0.1:8443`. The
+`korserver` auto-certificate is used by default; the browser will warn about a private
+CA until that CA is trusted or a public certificate is configured.
 
-Если `curl 127.0.0.1:8443` подключается, а затем получает `Recv failure: Connection reset
-by peer`, почти наверняка порт опубликован Docker-ом, но API внутри контейнера слушает
-`127.0.0.1:8443`. Для доступа с хоста выставьте:
+If `curl 127.0.0.1:8443` connects and then gets `Recv failure: Connection reset by
+peer`, the port is almost certainly published by Docker, but the API inside the
+container listens on `127.0.0.1:8443`. For access from the host, set:
 
 ```env
 KORSERVER_WEB__ENABLED=true
@@ -852,19 +872,20 @@ KORSERVER_WEB__LISTEN=0.0.0.0
 KORSERVER_WEB__TLS=true
 ```
 
-Если включить `web.enabled: true`, supervisor запустит Uvicorn API и отдачу static
-frontend из `/usr/share/korserver/frontend`, если frontend build присутствует в образе.
+If you enable `web.enabled: true`, supervisor starts the Uvicorn API and serves the
+static frontend from `/usr/share/korserver/frontend`, if a frontend build is present in
+the image.
 
-Health endpoint изнутри контейнера:
+Health endpoint from inside the container:
 
 ```bash
 docker compose exec korserver curl -kfsS https://127.0.0.1:8443/healthz
 ```
 
-GUI отправляет пароль только в login endpoint и получает короткоживущую
-`HttpOnly`/`SameSite=Strict` cookie-сессию. Изменяющие запросы дополнительно защищены
-CSRF-токеном. HTTP Basic остаётся доступен для внешних API-клиентов и диагностики.
-Настройте:
+The GUI only sends the password to the login endpoint and gets back a short-lived
+`HttpOnly`/`SameSite=Strict` cookie session. Mutating requests are additionally
+protected by a CSRF token. HTTP Basic remains available for external API clients and
+diagnostics. Configure:
 
 ```yaml
 web:
@@ -885,17 +906,17 @@ web:
 KORSERVER_ADMIN_PASSWORD_HASH=change-me
 ```
 
-Создать scrypt-хеш без передачи пароля через аргументы командной строки:
+Generate a scrypt hash without passing a password through command-line arguments:
 
 ```bash
 docker compose run --rm --entrypoint korctl korserver web hash-password
 ```
 
-Поле `admin_password` оставлено для bootstrap и совместимости, но для production
-предпочтительно `admin_password_hash`.
+The `admin_password` field is kept for bootstrap and compatibility, but
+`admin_password_hash` is preferred for production.
 
-Для TLS-терминирующего reverse proxy отключите встроенный TLS и явно разрешите
-внутренний HTTP:
+For a TLS-terminating reverse proxy, disable the built-in TLS and explicitly allow
+internal HTTP:
 
 ```yaml
 web:
@@ -908,32 +929,31 @@ web:
     - 127.0.0.1
 ```
 
-Прокси должен подключаться к этому loopback/private endpoint и публиковать только HTTPS.
-Не открывайте HTTP Web API наружу.
+The proxy should connect to this loopback/private endpoint and only publish HTTPS.
+Don't expose the HTTP Web API directly.
 
-Если proxy находится в Docker-сети, укажите CIDR этой сети, например
-`172.18.0.0/16`. Тогда Uvicorn будет принимать `X-Forwarded-For` и
-`X-Forwarded-Proto` только от доверенного proxy. Не используйте широкий диапазон
-без необходимости.
+If the proxy is on a Docker network, specify that network's CIDR, e.g.
+`172.18.0.0/16`. Uvicorn will then only accept `X-Forwarded-For` and
+`X-Forwarded-Proto` from the trusted proxy. Don't use a wide range unless you need to.
 
-`session_cookie_secure` оставляйте включённым и за HTTPS reverse proxy. Отключать его
-допустимо только для изолированной локальной HTTP-разработки.
+Keep `session_cookie_secure` enabled behind an HTTPS reverse proxy too. Only disable it
+for isolated local HTTP development.
 
-Compose-override для такого режима:
+Compose override for this setup:
 
 ```bash
 docker compose -f compose.yaml -f compose.proxy.yaml up -d
 ```
 
-В Docker override API слушает `0.0.0.0` внутри контейнера, но порт публикуется
-только на `127.0.0.1` хоста. Если reverse proxy передаёт `X-Forwarded-*`, задайте
-доверенный источник через переменную, например:
+In the Docker override, the API listens on `0.0.0.0` inside the container, but the port
+is only published on `127.0.0.1` on the host. If the reverse proxy sends
+`X-Forwarded-*`, set the trusted source via a variable, e.g.:
 
 ```env
 KORSERVER_WEB__TRUSTED_PROXIES='["172.18.0.1"]'
 ```
 
-Интерактивный root-терминал отключён по умолчанию. Для контролируемого включения:
+The interactive root terminal is disabled by default. To enable it in a controlled way:
 
 ```yaml
 web:
@@ -942,35 +962,38 @@ web:
   terminal_max_sessions: 2
 ```
 
-Открытие и закрытие терминальных сессий, а также изменяющие API-запросы записываются
-в `/var/log/korserver/audit.jsonl`. Тела запросов, пароли и токены туда не попадают.
+Opening and closing terminal sessions, as well as mutating API requests, are logged to
+`/var/log/korserver/audit.jsonl`. Request bodies, passwords and tokens never end up
+there.
 
-GUI `korpanel` после включения Web открывается на `https://127.0.0.1:8443/`. Статическая оболочка
-может загрузиться без credentials, но данные и любые действия недоступны без логина.
-Это полноценный интерфейс управления поверх тех же backend-сервисов, что и CLI:
+The `korpanel` GUI opens at `https://127.0.0.1:8443/` once Web is enabled. The static
+shell can load without credentials, but no data or actions are available without
+logging in. It's a full management interface over the same backend services as the
+CLI:
 
-- Dashboard: start/stop/reload/restart `ocserv`, runtime-процессы supervisor, DNS/firewall/log/config
-  status, запись generated config, apply firewall/NAT;
-- Users: создание/удаление, enable/disable, смена пароля, OTP enable/disable, OTP QR,
-  выпуск/revoke сертификата, PKCS#12 export/download, passphrase и Apple-compatible режим;
-- Sessions: список активных сессий через `occtl` и kick пользователя;
-- Upstream (включает бывшую отдельную вкладку Routing): статус, список/создание/редактирование/
-  удаление profiles, switch active profile, connect/disconnect, check host + auto-reconnect/
-  failover settings; server-side routing mode (direct/full/split) с kill-switch, routes/domains/
-  split IPs add/delete, reload, nft show/apply/cleanup;
-- Config: редактирование persistent `/etc/korserver/config.yaml`, validate YAML,
-  сохранение с atomic write, rendered files, diff и запись rendered files;
-- Diagnostics: runtime probes с разделением ok/warning/error;
-- Logs: tail файлов из configured log directory, включая вложенные логи вроде
-  `certbot/letsencrypt.log`, с ручной подгрузкой и live-режимом в GUI.
-- Terminal: интерактивная runtime `/bin/bash` PTY-сессия через WebSocket ticket,
-  выполняется внутри уже запущенного контейнера и отображается через xterm.js с
-  поддержкой ANSI, cursor control, resize и полноэкранных TUI-программ.
+- Dashboard: start/stop/reload/restart `ocserv`, supervisor runtime processes,
+  DNS/firewall/log/config status, writing the generated config, apply firewall/NAT;
+- Users: create/delete, enable/disable, change password, OTP enable/disable, OTP QR,
+  issue/revoke certificate, PKCS#12 export/download, passphrase and Apple-compatible
+  mode;
+- Sessions: list of active sessions via `occtl` and kicking a user;
+- Upstream (includes the former separate Routing tab): status, list/create/edit/delete
+  profiles, switch active profile, connect/disconnect, check host + auto-reconnect/
+  failover settings; server-side routing mode (direct/full/split) with kill-switch,
+  routes/domains/split IPs add/delete, reload, nft show/apply/cleanup;
+- Config: edit the persistent `/etc/korserver/config.yaml`, validate YAML, save with an
+  atomic write, rendered files, diff and write rendered files;
+- Diagnostics: runtime probes split into ok/warning/error;
+- Logs: tail files from the configured log directory, including nested logs like
+  `certbot/letsencrypt.log`, with manual loading and a live mode in the GUI;
+- Terminal: an interactive runtime `/bin/bash` PTY session over a WebSocket ticket,
+  running inside the already-started container and rendered via xterm.js with support
+  for ANSI, cursor control, resize and full-screen TUI programs.
 
-В верхней панели GUI есть глобальный `Dry-run` переключатель для опасных runtime-команд
-и кнопка переключения светлой/темной темы. Цветовая схема близка к Nord palette.
+The top of the GUI has a global `Dry-run` toggle for risky runtime commands and a
+light/dark theme switch. The color scheme is close to the Nord palette.
 
-Frontend-проверки:
+Frontend checks:
 
 ```bash
 make frontend-test
@@ -979,57 +1002,59 @@ make frontend-build
 make frontend-audit
 ```
 
-Vitest проверяет cookie/CSRF API flow. Код xterm.js загружается отдельным lazy chunk
-только при открытии включённой вкладки Terminal.
+Vitest checks the cookie/CSRF API flow. The xterm.js code loads as a separate lazy
+chunk only when the enabled Terminal tab is opened.
 
-Playwright smoke-тест входит в каждый раздел панели и проверяет условное отображение
-терминала с mocked API. В окружениях без bundled Chromium можно указать:
+A Playwright smoke test walks every section of the panel and checks the conditional
+rendering of the terminal with a mocked API. In environments without a bundled
+Chromium, you can set:
 
 ```bash
 PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium make frontend-e2e
 ```
 
-## Подключение Клиента
+## Connecting a Client
 
-После старта сервера и создания пользователя можно подключиться OpenConnect-клиентом:
+After the server has started and a user has been created, you can connect with an
+OpenConnect client:
 
 ```bash
 openconnect --protocol=anyconnect vpn.example.com
 ```
 
-Если порт нестандартный:
+If using a non-standard port:
 
 ```bash
 openconnect --protocol=anyconnect vpn.example.com:4443
 ```
 
-Для проверки с хоста, где запущен Docker и опубликован `443`, можно использовать адрес
-хоста или DNS-имя, которое указывает на хост.
+To test from the host running Docker with `443` published, you can use the host's
+address or a DNS name pointing at the host.
 
-Если используется auto CA, клиенту может потребоваться доверить `data/certs/ca.crt` или
-явно принять self-signed цепочку в тестовой среде.
+If using the auto CA, the client may need to trust `data/certs/ca.crt` or explicitly
+accept the self-signed chain in a test environment.
 
-## Diagnostics И Logs
+## Diagnostics and Logs
 
-Диагностика без выполнения опасных действий:
+Diagnostics without running any risky actions:
 
 ```bash
 docker compose exec korserver korctl diagnose --dry-run
 ```
 
-Диагностика runtime:
+Runtime diagnostics:
 
 ```bash
 docker compose exec korserver korctl diagnose
 ```
 
-Логи Docker:
+Docker logs:
 
 ```bash
 docker compose logs -f korserver
 ```
 
-Логи через CLI:
+Logs via the CLI:
 
 ```bash
 docker compose exec korserver korctl logs api.log --lines 100
@@ -1037,14 +1062,14 @@ docker compose exec korserver korctl logs supervisord.log --lines 100
 docker compose exec korserver korctl logs certbot/letsencrypt.log --lines 100
 ```
 
-Проверка generated файлов:
+Check the generated files:
 
 ```bash
 docker compose exec korserver ls -la /var/lib/korserver/generated
 docker compose exec korserver sed -n '1,160p' /var/lib/korserver/generated/ocserv.conf
 ```
 
-Проверка процессов:
+Check processes:
 
 ```bash
 docker compose exec korserver korctl server process list
@@ -1053,22 +1078,23 @@ docker compose exec korserver pgrep -a ocserv
 
 ## Security Notes
 
-- Не коммитьте `.env`, `data/`, `logs/`, private keys, PKCS#12 и generated secrets.
-- Не передавайте пароли через shell arguments в production, если это попадет в history.
-- CLI prompts для паролей скрывают ввод.
-- Render/diff/API output маскирует секреты, но секретные файлы на volume остаются вашей
-  ответственностью.
-- `data/certs/ca.key` - ключевой секрет всей auto-CA. Храните backup отдельно и защищенно.
-- `nft apply` и `nft cleanup` влияют на сетевые правила контейнера. Сначала используйте
-  `--dry-run`.
-- GUI Terminal открывает интерактивную shell-сессию внутри контейнера через одноразовый
-  WebSocket ticket, выданный admin API. Не публикуйте Web API наружу без TLS, сильного
-  пароля и сетевого ограничения доступа.
-- Проект не удаляет пользовательские файлы без явной команды.
+- Don't commit `.env`, `data/`, `logs/`, private keys, PKCS#12 or generated secrets.
+- Don't pass passwords via shell arguments in production if that ends up in history.
+- CLI prompts for passwords hide the input.
+- Render/diff/API output masks secrets, but secret files on the volume remain your own
+  responsibility.
+- `data/certs/ca.key` is the one key secret behind the whole auto-CA. Keep a separate,
+  protected backup of it.
+- `nft apply` and `nft cleanup` affect the container's network rules. Use `--dry-run`
+  first.
+- The GUI Terminal opens an interactive shell session inside the container via a
+  one-time WebSocket ticket issued by the admin API. Don't expose the Web API without
+  TLS, a strong password and network access restrictions.
+- The project never deletes user files without an explicit command.
 
 ## Troubleshooting
 
-Контейнер unhealthy:
+Container unhealthy:
 
 ```bash
 docker compose ps
@@ -1076,20 +1102,20 @@ docker compose logs --tail=200 korserver
 docker compose exec korserver korctl server status
 ```
 
-Нет `/dev/net/tun`:
+No `/dev/net/tun`:
 
 ```bash
 test -c /dev/net/tun
 sudo modprobe tun
 ```
 
-Порт 443 занят:
+Port 443 in use:
 
 ```bash
 ss -lntup | grep ':443'
 ```
 
-Смените port mapping и `server.port`, например:
+Change the port mapping and `server.port`, e.g.:
 
 ```yaml
 server:
@@ -1104,60 +1130,60 @@ ports:
   - "4443:4443/udp"
 ```
 
-Ошибки в YAML/env:
+Errors in YAML/env:
 
 ```bash
 docker compose run --rm --entrypoint korctl korserver \
   --config /etc/korserver/config.yaml config validate
 ```
 
-Посмотреть, какой конфиг реально будет сгенерирован:
+See what config would actually be generated:
 
 ```bash
 docker compose run --rm --entrypoint korctl korserver \
   --config /etc/korserver/config.yaml config render --dry-run
 ```
 
-Проверить, создан ли control socket для `occtl`:
+Check whether the `occtl` control socket was created:
 
 ```bash
 docker compose exec korserver sh -lc 'ls -l /var/lib/korserver/generated/occtl.sock && occtl -s /var/lib/korserver/generated/occtl.sock show status'
 ```
 
-Проверить внутренний worker IPC socket ocserv:
+Check the internal ocserv worker IPC socket:
 
 ```bash
 docker compose exec korserver sh -lc 'find /var/lib/korserver/generated -maxdepth 1 -type s -name "ocserv.sock*" -print'
 ```
 
-Проверить сертификаты:
+Check the certificates:
 
 ```bash
 docker compose exec korserver ls -la /var/lib/korserver/certs
 ```
 
-## Проверенный Runtime Smoke
+## Verified Runtime Smoke Test
 
-Для текущей версии был выполнен Docker smoke test с `/dev/net/tun`, `NET_ADMIN` и
-`NET_RAW`:
+For the current version, a Docker smoke test was performed with `/dev/net/tun`,
+`NET_ADMIN` and `NET_RAW`:
 
-- final image `korserver:latest` собирается;
-- контейнер становится healthy;
-- `supervisorctl` показывает `ocserv RUNNING`;
-- `korctl server status` работает внутри runtime image;
-- auto CA/server certificates создаются;
-- `occtl.sock` и `ocserv.sock.*` создаются в generated directory;
-- `ocserv` слушает `443/tcp` и `443/udp`.
+- the final `korserver:latest` image builds;
+- the container becomes healthy;
+- `supervisorctl` shows `ocserv RUNNING`;
+- `korctl server status` works inside the runtime image;
+- the auto CA/server certificates are created;
+- `occtl.sock` and `ocserv.sock.*` are created in the generated directory;
+- `ocserv` listens on `443/tcp` and `443/udp`.
 
-Остаются deployment-specific проверки:
+Deployment-specific checks remain:
 
-- подключение реального OpenConnect клиента;
-- upstream OpenConnect tunnel в middle-server режиме;
-- nftables apply/cleanup в вашей сетевой среде;
-- fwmark policy routing и split DNS для ваших доменов/сетей;
-- end-to-end доступ клиента к закрытому контуру.
+- connecting a real OpenConnect client;
+- the upstream OpenConnect tunnel in middle-server mode;
+- nftables apply/cleanup in your network environment;
+- fwmark policy routing and split DNS for your domains/networks;
+- end-to-end client access to the private network.
 
-## Полезные Команды
+## Useful Commands
 
 ```bash
 # Build and test
@@ -1202,3 +1228,8 @@ docker compose exec korserver korctl diagnose --dry-run
 # Stop
 docker compose down
 ```
+
+## License
+
+Korvus Server is licensed under the [GNU General Public License v3.0](LICENSE) or
+later.

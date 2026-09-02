@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "korserver"
-version = "0.3.18"
+version = "1.0.0"
 description = "Korvus Server OpenConnect/ocserv VPN management platform"
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "MIT" }
+license = { text = "GPL-3.0-or-later" }
 authors = [{ name = "korserver maintainers" }]
 dependencies = [
   "fastapi>=0.111,<1",
