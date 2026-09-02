@@ -1,0 +1,159 @@
+system:
+  timezone: Europe/Moscow
+  data_dir: /var/lib/korserver
+  log_dir: /var/log/korserver
+  generated_dir: /var/lib/korserver/generated
+  secrets_dir: /var/lib/korserver/secrets
+  log_level: info
+  project_name: korserver
+  # Rotate files under log_dir by size and/or age (0 disables a trigger).
+  log_rotation:
+    enabled: false
+    max_size_mb: 50
+    max_age: 0
+    max_age_unit: days # hours | days | weeks | months
+    keep_files: 5
+
+server:
+  enabled: true
+  listen: 0.0.0.0
+  port: 443
+  udp_enabled: true
+  device: vpns
+  cn: vpn.example.com
+  realm: Korvus Server
+  ipv4_network: 10.10.10.0/24
+  dns:
+    - 1.1.1.1
+    - 8.8.8.8
+  search_domains:
+    - corp.example.com
+  routes: []
+  no_routes: []
+  max_clients: 128
+  max_same_clients: 2
+  keepalive: 32400
+  compression: false
+  cisco_client_compat: true
+  # Maps to ocserv's "log-level" directive: 0-1 log basic errors only, 2 adds
+  # per-user connect/disconnect/auth events to ocserv.log, 3+ gets noisier
+  # (debug info, then low-level TLS handshake internals).
+  debug_level: 2
+  camouflage:
+    enabled: false
+
+certificates:
+  mode: auto
+  ca_name: Korvus Server CA
+  server_cert: null
+  server_key: null
+  ca_cert: null
+  letsencrypt:
+    enabled: false
+    email: null
+    domains: []
+    renew_reload: true
+    auto_renew_enabled: true
+    auto_renew_interval: 7
+    auto_renew_interval_unit: days # hours | days | weeks | months
+    # Address/port certbot binds to for the HTTP-01 challenge. Leave http01_address
+    # null to follow server.listen automatically; http01_port defaults to 80.
+    http01_address: null
+    http01_port: 80
+
+auth:
+  password:
+    enabled: true
+  certificate:
+    enabled: false
+  otp:
+    enabled: false
+    ocserv_oath_auth: false
+    issuer: Korvus Server
+  oidc:
+    enabled: false
+    connector: pam
+    pam:
+      service: ocserv
+      gid_min: 1000
+    radius:
+      config_file: /etc/radiusclient/radiusclient.conf
+      groupconfig: true
+      nas_identifier: null
+      group_separator: semicolon
+
+identity:
+  config_per_group_dir: /var/lib/korserver/generated/config-per-group
+  config_per_user_dir: /var/lib/korserver/generated/config-per-user
+  default_group_config: null
+  select_group_by_url: false
+  default_select_group: null
+  oidc_providers: []
+  group_policies: []
+
+upstream:
+  enabled: false
+  interface: oc-middle0
+  active_profile: null
+  check_interval: 5
+  check_threshold: 3
+  check_settle_seconds: 15
+  failover: false
+  profiles: []
+
+routing:
+  mode: full
+  main_interface: auto
+  fwmark: "0x0c01"
+  table_id: 1201
+  nft_prefix: korserver
+  split:
+    tunnel_dns: false
+    # Route the server host's own traffic through the split rules too
+    # (host follows the same routes/domain masks as VPN clients).
+    host_traffic: false
+    dnsmasq_listen: 10.10.10.1
+    dnsmasq_port: 53
+    routes_file: /var/lib/korserver/routes.txt
+    domains_file: /var/lib/korserver/domains.txt
+    routes: []
+    domains: []
+
+# Internal DNS: when enabled, the VPN server itself becomes the DNS server
+# for clients (via the project-owned dnsmasq instance listening on
+# routing.split.dnsmasq_listen) and blocks the domains below, Pi-hole style.
+# Upstream resolvers are taken from server.dns.
+internal_dns:
+  enabled: false
+  # Inline list of blocked domains.
+  blocklist_domains: []
+  # Local text files with blocked domains (hosts or plain-domain format).
+  blocklist_files: []
+  # HTTP(S) URLs of public blocklists (e.g. StevenBlack hosts, HaGeZi).
+  # Downloads are validated and cached per URL; refresh with
+  # `korctl internal-dns refresh --url <url>`.
+  blocklist_urls: []
+
+web:
+  enabled: false
+  listen: 127.0.0.1
+  port: 8443
+  tls: true
+  tls_cert: null
+  tls_key: null
+  allow_insecure_http: false
+  trusted_proxies: []
+  admin_user: admin
+  admin_password: null
+  admin_password_hash: null
+  terminal_enabled: false
+  terminal_idle_timeout: 900
+  terminal_max_sessions: 2
+  session_lifetime: 43200
+  session_cookie_secure: true
+
+cli:
+  enabled: true
+
+advanced:
+  raw_ocserv_options: []

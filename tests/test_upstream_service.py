@@ -1,0 +1,1223 @@
+from __future__ import annotations
+
+import base64
+import os
+import subprocess
+import sys
+import time
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from korserver.config.models import AppConfig, UpstreamProfileConfig
+from korserver.services import upstream as upstream_module
+from korserver.services.command import CommandError, CommandResult
+from korserver.services.upstream import UpstreamService
+
+
+class FakeRunner:
+    """tmp_path is optional: only tests exercising a connect() that must
+    look genuinely alive afterward (_verify_backgrounded polls the pid
+    file, see upstream.py) need it -- pass it whenever the test calls
+    connect()/connect_active() outside dry_run and expects success, and
+    call close() in a finally block to clean up the spawned fake process."""
+
+    def __init__(self, tmp_path: Path | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.tmp_path = tmp_path
+        self.processes: list[subprocess.Popen[bytes]] = []
+
+    def run(self, argv: list[str], **kwargs: Any) -> CommandResult:
+        self.calls.append({"argv": argv, **kwargs})
+        if argv[0] == "openconnect" and self.tmp_path is not None:
+            _write_fake_openconnect_pid(argv, self.processes, self.tmp_path)
+        return CommandResult(argv=tuple(argv), returncode=0, stdout="", stderr="")
+
+    def call_for(self, program: str) -> dict[str, Any]:
+        return next(call for call in self.calls if call["argv"][0] == program)
+
+    def close(self) -> None:
+        for process in self.processes:
+            process.terminate()
+        for process in self.processes:
+            process.wait(timeout=5)
+
+
+def _write_pid(service: UpstreamService, pid: int | str) -> None:
+    profile = service.selected_profile()
+    assert profile is not None
+    path = service._pid_file(profile)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(pid))
+
+
+def _spawn_fake_openconnect(tmp_path: Path) -> subprocess.Popen[bytes]:
+    """A live process whose /proc/<pid>/cmdline says "openconnect".
+
+    _is_running() verifies the command line to defend against pid-number
+    recycling, so tests can no longer pass an arbitrary live pid (e.g.
+    os.getpid(), which reads as python) as a fake connection.
+    """
+    ready_file = tmp_path / f"fake-oc-ready-{time.monotonic_ns()}"
+    script = (
+        "import signal, sys, time\n"
+        "signal.signal(signal.SIGTERM, lambda *args: sys.exit(0))\n"
+        f"open({str(ready_file)!r}, 'w').close()\n"
+        "time.sleep(30)\n"
+    )
+    process = subprocess.Popen(
+        ["bash", "-c", 'exec -a openconnect "$0" -c "$1"', sys.executable, script]
+    )
+    deadline = time.monotonic() + 5
+    while not ready_file.exists() and time.monotonic() < deadline:
+        time.sleep(0.05)
+    return process
+
+
+def _write_fake_openconnect_pid(
+    argv: list[str],
+    processes: list[subprocess.Popen[bytes]],
+    tmp_path: Path,
+) -> None:
+    """Simulate a real openconnect --background daemon staying alive: spawn
+    a fake process with an "openconnect" cmdline and write its pid to
+    whatever --pid-file= the call requested, so _verify_backgrounded's
+    post-connect liveness poll (see upstream.py) finds a live connection
+    the same way it would for a genuinely successful dial."""
+    pid_file = next((arg.split("=", 1)[1] for arg in argv if arg.startswith("--pid-file=")), None)
+    if pid_file is None:
+        return
+    process = _spawn_fake_openconnect(tmp_path)
+    processes.append(process)
+    Path(pid_file).parent.mkdir(parents=True, exist_ok=True)
+    Path(pid_file).write_text(str(process.pid))
+
+
+def _config(tmp_path: Path) -> AppConfig:
+    return AppConfig.model_validate(
+        {
+            "system": {
+                "data_dir": tmp_path / "data",
+                "generated_dir": tmp_path / "generated",
+                "secrets_dir": tmp_path / "secrets",
+                "log_dir": tmp_path / "logs",
+            }
+        }
+    )
+
+
+def test_openconnect_argv_uses_minimal_vpnc_script_in_split_mode(tmp_path: Path) -> None:
+    config = AppConfig.model_validate(
+        {
+            "system": {
+                "data_dir": tmp_path / "data",
+                "generated_dir": tmp_path / "generated",
+                "secrets_dir": tmp_path / "secrets",
+            },
+            "routing": {"mode": "split"},
+        }
+    )
+    profile = UpstreamProfileConfig(
+        name="primary", server="vpn.example.com", auth_type="password", username="user"
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    script_args = [arg for arg in argv if arg.startswith("--script=")]
+    assert len(script_args) == 1
+    script = Path(script_args[0].split("=", 1)[1])
+    assert script.exists()
+    assert os.access(script, os.X_OK)
+    content = script.read_text(encoding="utf-8")
+    # The whole point: never delegate to the distribution vpnc-script,
+    # which would apply upstream-pushed routes/DNS to the namespace.
+    assert "/usr/share/vpnc-scripts" not in content
+    assert "ip link set" in content
+
+
+def test_openconnect_argv_appends_camouflage_secret_to_target(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        port="443",
+        auth_type="password",
+        username="user",
+        camouflage_secret="s3cret",
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    assert argv[-1] == "vpn.example.com:443/?s3cret"
+
+
+def test_openconnect_argv_omits_camouflage_suffix_when_unset(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary", server="vpn.example.com", port="443", auth_type="password", username="user"
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    assert argv[-1] == "vpn.example.com:443"
+
+
+def test_openconnect_argv_keeps_distribution_vpnc_script_in_direct_mode(
+    tmp_path: Path,
+) -> None:
+    config = AppConfig.model_validate(
+        {
+            "system": {
+                "data_dir": tmp_path / "data",
+                "generated_dir": tmp_path / "generated",
+                "secrets_dir": tmp_path / "secrets",
+            },
+            "routing": {"mode": "direct"},
+        }
+    )
+    profile = UpstreamProfileConfig(
+        name="primary", server="vpn.example.com", auth_type="password", username="user"
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    assert not [arg for arg in argv if arg.startswith("--script=")]
+
+
+def test_openconnect_argv_uses_cert_file_path_directly(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="cert",
+        cert_file="/etc/korserver/upstream.crt",
+        key_file="/etc/korserver/upstream.key",
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    assert "--certificate" in argv
+    assert argv[argv.index("--certificate") + 1] == "/etc/korserver/upstream.crt"
+    assert argv[argv.index("--sslkey") + 1] == "/etc/korserver/upstream.key"
+
+
+def test_openconnect_argv_materializes_base64_cert_and_key(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="cert",
+        cert_file_base64=base64.b64encode(b"cert-bytes").decode(),
+        key_file_base64=base64.b64encode(b"key-bytes").decode(),
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    cert_path = Path(argv[argv.index("--certificate") + 1])
+    key_path = Path(argv[argv.index("--sslkey") + 1])
+    assert cert_path.read_bytes() == b"cert-bytes"
+    assert key_path.read_bytes() == b"key-bytes"
+    assert cert_path.parent == tmp_path / "secrets" / "upstream" / "primary"
+
+
+def test_openconnect_argv_materializes_base64_p12_without_key(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="p12",
+        cert_file_base64=base64.b64encode(b"p12-bytes").decode(),
+        cert_pass="hunter2",
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    cert_path = Path(argv[argv.index("--certificate") + 1])
+    assert cert_path.read_bytes() == b"p12-bytes"
+    assert "--sslkey" not in argv
+    assert "--key-password=hunter2" in argv
+
+
+def test_openconnect_argv_passes_cert_pass_as_key_password(tmp_path: Path) -> None:
+    # Regression test: cert_pass was stored and masked in logs but never
+    # actually handed to openconnect, so it always fell back to prompting
+    # interactively for the PKCS#12/key passphrase and failed under
+    # --non-inter ("User input required in non-interactive mode").
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="cert",
+        cert_file="/etc/korserver/upstream.crt",
+        key_file="/etc/korserver/upstream.key",
+        cert_pass="hunter2",
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    assert "--key-password=hunter2" in argv
+
+
+def test_openconnect_argv_omits_key_password_when_unset(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="cert",
+        cert_file="/etc/korserver/upstream.crt",
+        key_file="/etc/korserver/upstream.key",
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    assert not any(arg.startswith("--key-password") for arg in argv)
+
+
+def test_openconnect_argv_daemonizes_with_pid_file(tmp_path: Path) -> None:
+    # Regression test: openconnect stays in the foreground holding the tunnel
+    # open for as long as the connection lives, so without --background a
+    # *successful* connection never returns on its own -- our own code would
+    # then wait out its timeout and report a working connection as a failure.
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="cert",
+        cert_file="/etc/korserver/upstream.crt",
+        key_file="/etc/korserver/upstream.key",
+    )
+    service = UpstreamService(config)
+
+    argv = service.openconnect_argv(profile)
+
+    assert "--background" in argv
+    assert f"--pid-file={service._pid_file(profile)}" in argv
+
+
+def test_cert_file_and_cert_file_base64_are_mutually_exclusive(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="not both"):
+        UpstreamProfileConfig(
+            name="primary",
+            server="vpn.example.com",
+            auth_type="cert",
+            cert_file="/etc/korserver/upstream.crt",
+            cert_file_base64=base64.b64encode(b"cert-bytes").decode(),
+        )
+
+
+def test_cert_file_base64_must_be_valid_base64() -> None:
+    with pytest.raises(ValueError, match="valid base64"):
+        UpstreamProfileConfig(
+            name="primary",
+            server="vpn.example.com",
+            auth_type="cert",
+            cert_file_base64="not-valid-base64!!!",
+        )
+
+
+def test_cert_file_base64_accepts_standard_multiline_wrapping(tmp_path: Path) -> None:
+    # Regression test: `base64 file.p12` (and most other base64 tools) wrap
+    # output at 64/76 characters per line. base64.b64decode(..., validate=True)
+    # rejects the embedded newlines outright, so pasting standard base64
+    # output -- rather than a single unwrapped line -- always failed.
+    encoded = base64.b64encode(b"p12-bytes" * 20).decode()
+    wrapped = "\n".join(encoded[i : i + 64] for i in range(0, len(encoded), 64))
+
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="p12",
+        cert_file_base64=wrapped,
+    )
+
+    assert profile.cert_file_base64 == encoded
+
+    config = _config(tmp_path)
+    argv = UpstreamService(config).openconnect_argv(profile)
+    cert_path = Path(argv[argv.index("--certificate") + 1])
+    assert cert_path.read_bytes() == b"p12-bytes" * 20
+
+
+def _profile(name: str = "primary", server: str = "vpn.example.com") -> UpstreamProfileConfig:
+    return UpstreamProfileConfig(
+        name=name, server=server, auth_type="password", username="user"
+    )
+
+
+def test_connect_active_repairs_stale_resolv_conf_and_uses_graceful_timeout(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text(
+        "#@VPNC_GENERATED@ -- this file is generated, do not edit\n"
+        "# and will be overwritten by vpnc\n"
+        "# as long as the above mark is intact\n"
+        "nameserver 10.0.0.1\n"
+    )
+    monkeypatch.setattr(upstream_module, "RESOLV_CONF", resolv_conf)
+
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner(tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        service.connect_active()
+    finally:
+        runner.close()
+
+    assert resolv_conf.read_text() == "nameserver 10.0.0.1\n"
+    openconnect_call = runner.call_for("openconnect")
+    assert openconnect_call["graceful_timeout"] == 5
+    assert openconnect_call["output_file"] == service.log_file
+
+
+def test_connect_active_leaves_healthy_resolv_conf_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("nameserver 10.0.0.1\n")
+    monkeypatch.setattr(upstream_module, "RESOLV_CONF", resolv_conf)
+
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner(tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        service.connect_active()
+    finally:
+        runner.close()
+
+    assert resolv_conf.read_text() == "nameserver 10.0.0.1\n"
+
+
+def test_connect_active_does_not_repair_resolv_conf_on_dry_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    stale_content = "#@VPNC_GENERATED@ -- generated, do not edit\nnameserver 10.0.0.1\n"
+    resolv_conf.write_text(stale_content)
+    monkeypatch.setattr(upstream_module, "RESOLV_CONF", resolv_conf)
+
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner()
+    service = UpstreamService(config, runner=runner)
+
+    service.connect_active(dry_run=True)
+
+    assert resolv_conf.read_text() == stale_content
+
+
+def test_repair_stale_resolv_conf_noop_when_marker_absent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    resolv_conf = tmp_path / "resolv.conf"
+    resolv_conf.write_text("nameserver 10.0.0.1\n")
+    monkeypatch.setattr(upstream_module, "RESOLV_CONF", resolv_conf)
+
+    UpstreamService(_config(tmp_path))._repair_stale_resolv_conf()
+
+    assert resolv_conf.read_text() == "nameserver 10.0.0.1\n"
+
+
+def test_repair_stale_resolv_conf_noop_when_file_missing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(upstream_module, "RESOLV_CONF", tmp_path / "does-not-exist")
+
+    UpstreamService(_config(tmp_path))._repair_stale_resolv_conf()
+
+
+def test_status_reports_connected_when_pid_file_has_live_process(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config)
+    process = _spawn_fake_openconnect(tmp_path)
+    try:
+        _write_pid(service, process.pid)
+
+        assert service.status().connected is True
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_live_pid_of_a_different_program_does_not_count_as_connected(
+    tmp_path: Path,
+) -> None:
+    # Regression test: container restarts reset the pid namespace, so a
+    # stale pid file can point at an unrelated long-lived process (ocserv
+    # worker, dnsmasq...). Without checking /proc/<pid>/cmdline that made
+    # the profile look permanently connected -- Connect refused to run
+    # while the status genuinely was "down".
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config)
+    _write_pid(service, os.getpid())  # alive, but it's python, not openconnect
+
+    assert service.status().connected is False
+
+
+def test_status_reports_not_connected_when_pid_file_stale(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config)
+    process = subprocess.Popen([sys.executable, "-c", "pass"])
+    process.wait()
+    _write_pid(service, process.pid)
+
+    assert service.status().connected is False
+
+
+def test_status_reports_not_connected_when_no_pid_file(tmp_path: Path) -> None:
+    assert UpstreamService(_config(tmp_path)).status().connected is False
+
+
+def test_connect_raises_when_backgrounded_process_dies_immediately(tmp_path: Path) -> None:
+    """Regression test: openconnect's --background parent exits 0 the
+    moment it forks into the background -- BEFORE the daemon finishes
+    binding the tun device. If that later fails (e.g. "Failed to bind
+    local tun device (TUNSETIFF): Device or resource busy"), the daemon
+    dies within well under a second with no way for the already-exited
+    parent to report it, so runner.run() alone sees a clean success.
+    Without _verify_backgrounded, connect() would return that false
+    success too."""
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    # No tmp_path passed -- FakeRunner reports the openconnect call as a
+    # plain success without leaving a live process behind, exactly like a
+    # daemon that backgrounded and then immediately died.
+    service = UpstreamService(config, runner=FakeRunner())
+
+    with pytest.raises(CommandError) as exc_info:
+        service.connect_active()
+    assert "gone moments later" in exc_info.value.result.stderr
+
+
+def test_recover_reports_failure_instead_of_a_false_success_when_background_dies(
+    tmp_path: Path,
+) -> None:
+    """The false "reconnected" this fixes wasn't just a cosmetic log line:
+    recover() short-circuits (returns True) on the first apparent success,
+    so a lying connect() meant the watchdog's own loop (see
+    cli.py::upstream_watch) would keep resetting consecutive_failures to 0
+    and never actually recover -- an invisible, endless retry loop on a
+    connection that was never really up."""
+    config = _config(tmp_path)
+    config.upstream.failover = False
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config, runner=FakeRunner())
+
+    assert service.recover() is False
+
+
+def test_connect_active_is_a_noop_when_already_connected(tmp_path: Path) -> None:
+    # Idempotency: the watchdog auto-connects in the background, so a manual
+    # Connect can race an already-established tunnel; that must not error
+    # and must not dial a second openconnect.
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner()
+    service = UpstreamService(config, runner=runner)
+    process = _spawn_fake_openconnect(tmp_path)
+    try:
+        _write_pid(service, process.pid)
+
+        result = service.connect_active()
+
+        assert result.returncode == 0
+        assert "already connected" in result.stdout
+        assert not any(call["argv"][0] == "openconnect" for call in runner.calls)
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_disconnect_noop_when_not_connected(tmp_path: Path) -> None:
+    result = UpstreamService(_config(tmp_path)).disconnect()
+
+    assert result.returncode == 0
+    assert result.stdout == "not connected"
+
+
+def test_disconnect_terminates_process_gracefully(tmp_path: Path) -> None:
+    process = _spawn_fake_openconnect(tmp_path)
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config, runner=FakeRunner())
+    _write_pid(service, process.pid)
+
+    result = service.disconnect()
+
+    assert result.stdout == "disconnected"
+    assert process.wait(timeout=2) == 0
+
+
+def test_disconnect_dry_run_does_not_kill_process(tmp_path: Path) -> None:
+    process = _spawn_fake_openconnect(tmp_path)
+    try:
+        config = _config(tmp_path)
+        config.upstream.profiles.append(_profile())
+        config.upstream.active_profile = "primary"
+        service = UpstreamService(config)
+        _write_pid(service, process.pid)
+
+        result = service.disconnect(dry_run=True)
+
+        assert result.dry_run is True
+        assert process.poll() is None
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_connect_active_applies_nftables_before_dialing_when_mode_not_direct(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    assert config.routing.mode == "full"
+    runner = FakeRunner(tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        service.connect_active()
+    finally:
+        runner.close()
+
+    programs = [call["argv"][0] for call in runner.calls]
+    assert programs.count("nft") == 3  # delete filter table, delete nat table, nft -f
+    assert programs.index("nft") < programs.index("openconnect")
+
+
+def test_connect_active_applies_policy_routing_after_successful_connect(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner(tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        service.connect_active()
+    finally:
+        runner.close()
+
+    ip_calls = [call["argv"] for call in runner.calls if call["argv"][0] == "ip"]
+    assert ["ip", "route", "replace", "default", "dev", "oc-middle0", "table", "1201"] in ip_calls
+
+
+def test_connect_active_skips_nftables_and_does_not_add_a_policy_route_in_direct_mode(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.routing.mode = "direct"
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner(tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        service.connect_active()
+    finally:
+        runner.close()
+
+    # nftables is skipped entirely; policy routing still runs its cleanup
+    # path (to remove any stale rule from a previous full/split config) but
+    # must not install a route, since "direct" means korserver stays out of
+    # routing decisions altogether.
+    assert not any(call["argv"][0] == "nft" for call in runner.calls)
+    assert not any(call["argv"][:3] == ["ip", "route", "replace"] for call in runner.calls)
+
+
+def test_disconnect_cleans_up_policy_routing(tmp_path: Path) -> None:
+    process = _spawn_fake_openconnect(tmp_path)
+    runner = FakeRunner()
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config, runner=runner)
+    _write_pid(service, process.pid)
+
+    service.disconnect()
+    process.wait(timeout=2)
+
+    ip_calls = [call["argv"] for call in runner.calls if call["argv"][0] == "ip"]
+    assert ["ip", "route", "flush", "table", "1201"] in ip_calls
+
+
+def test_is_healthy_false_when_not_connected(tmp_path: Path) -> None:
+    assert UpstreamService(_config(tmp_path)).is_healthy() is False
+
+
+def test_is_healthy_true_when_connected_without_check_host(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile())
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config)
+    process = _spawn_fake_openconnect(tmp_path)
+    try:
+        _write_pid(service, process.pid)
+
+        assert service.is_healthy() is True
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+class PingRunner:
+    def __init__(self, *, ping_ok: bool) -> None:
+        self.ping_ok = ping_ok
+
+    def run(self, argv: list[str], **kwargs: Any) -> CommandResult:
+        del kwargs
+        if argv[0] == "ping":
+            return CommandResult(
+                argv=tuple(argv), returncode=0 if self.ping_ok else 1, stdout="", stderr=""
+            )
+        return CommandResult(argv=tuple(argv), returncode=0, stdout="", stderr="")
+
+
+def test_healthcheck_pings_through_the_tunnel_interface(tmp_path: Path) -> None:
+    # Regression test: a plain ping reaches a public check_host (1.1.1.1)
+    # via the uplink even when the tunnel is dead, so the watchdog reported
+    # healthy forever and never recovered.
+    config = _config(tmp_path)
+    config.upstream.profiles.append(
+        UpstreamProfileConfig(
+            name="primary",
+            server="vpn.example.com",
+            auth_type="password",
+            username="user",
+            check_host="1.1.1.1",
+        )
+    )
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner()
+    service = UpstreamService(config, runner=runner)
+
+    service.healthcheck()
+
+    ping = runner.call_for("ping")["argv"]
+    assert ping[:3] == ["ping", "-I", "oc-middle0"]
+    assert ping[-1] == "1.1.1.1"
+
+
+def test_is_healthy_true_when_check_host_ping_succeeds(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(
+        UpstreamProfileConfig(
+            name="primary",
+            server="vpn.example.com",
+            auth_type="password",
+            username="user",
+            check_host="10.0.0.1",
+        )
+    )
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config, runner=PingRunner(ping_ok=True))
+    process = _spawn_fake_openconnect(tmp_path)
+    try:
+        _write_pid(service, process.pid)
+
+        assert service.is_healthy() is True
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+def test_is_healthy_false_when_check_host_ping_fails(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(
+        UpstreamProfileConfig(
+            name="primary",
+            server="vpn.example.com",
+            auth_type="password",
+            username="user",
+            check_host="10.0.0.1",
+        )
+    )
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config, runner=PingRunner(ping_ok=False))
+    process = _spawn_fake_openconnect(tmp_path)
+    try:
+        _write_pid(service, process.pid)
+
+        assert service.is_healthy() is False
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+
+class ScriptedConnectRunner:
+    """Fakes connect_active()'s underlying runner: openconnect calls whose
+    server host is in fail_servers raise CommandError (as a real failed
+    connect attempt would under check=True); everything else -- including
+    the nftables/ip plumbing connect_active()/disconnect() also trigger --
+    succeeds, and (for openconnect specifically) leaves a genuinely live
+    fake process behind so _verify_backgrounded's post-connect liveness
+    poll (see upstream.py) finds the connection still up, same as a real
+    successful dial. Call close() in a finally block to clean these up."""
+
+    def __init__(self, fail_servers: set[str], tmp_path: Path) -> None:
+        self.fail_servers = fail_servers
+        self.tmp_path = tmp_path
+        self.calls: list[list[str]] = []
+        self.processes: list[subprocess.Popen[bytes]] = []
+
+    def run(self, argv: list[str], **kwargs: Any) -> CommandResult:
+        del kwargs
+        self.calls.append(list(argv))
+        if argv[0] == "openconnect":
+            host = argv[-1].split(":")[0]
+            if host in self.fail_servers:
+                result = CommandResult(
+                    argv=tuple(argv), returncode=1, stdout="", stderr="auth failed"
+                )
+                raise CommandError(result)
+            _write_fake_openconnect_pid(argv, self.processes, self.tmp_path)
+        return CommandResult(argv=tuple(argv), returncode=0, stdout="", stderr="")
+
+    def close(self) -> None:
+        for process in self.processes:
+            process.terminate()
+        for process in self.processes:
+            process.wait(timeout=5)
+
+
+def test_recover_retries_same_profile_when_failover_disabled(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.failover = False
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers=set(), tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        assert service.recover() is True
+    finally:
+        runner.close()
+    assert service.selected_profile() is not None
+    assert service.selected_profile().name == "primary"
+
+
+def test_recover_fails_over_to_next_profile_when_enabled(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.failover = True
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers={"vpn.example.com"}, tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        assert service.recover() is True
+    finally:
+        runner.close()
+    assert service.selected_profile() is not None
+    assert service.selected_profile().name == "backup"
+
+
+def test_recover_does_not_fail_over_when_disabled(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.failover = False
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers={"vpn.example.com"}, tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        assert service.recover() is False
+    finally:
+        runner.close()
+    assert service.selected_profile() is not None
+    assert service.selected_profile().name == "primary"
+
+
+def test_recover_wraps_around_the_profile_cycle(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.failover = True
+    config.upstream.profiles.append(_profile("a", server="a.example.com"))
+    config.upstream.profiles.append(_profile("b", server="b.example.com"))
+    config.upstream.profiles.append(_profile("c", server="c.example.com"))
+    config.upstream.active_profile = "c"
+    runner = ScriptedConnectRunner(
+        fail_servers={"c.example.com", "a.example.com"}, tmp_path=tmp_path
+    )
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        assert service.recover() is True
+    finally:
+        runner.close()
+    assert service.selected_profile() is not None
+    assert service.selected_profile().name == "b"
+
+
+def test_recover_returns_false_when_no_profiles_configured(tmp_path: Path) -> None:
+    assert UpstreamService(_config(tmp_path)).recover() is False
+
+
+def test_recover_never_dials_a_disabled_fallback_profile(tmp_path: Path) -> None:
+    # Regression test: with the configured active_profile disabled,
+    # selected_profile() correctly reports None (it never auto-promotes a
+    # replacement) -- but recover()'s old fallback to profiles[0] didn't
+    # check `enabled` either, so it could redial that same disabled profile.
+    # connect() itself doesn't gate on `enabled`, so the dial would succeed,
+    # and the very next enforce_profile_enablement() tick would immediately
+    # tear it back down -- live-locking the watchdog against itself.
+    config = _config(tmp_path)
+    config.upstream.failover = True
+    primary = _profile("primary")
+    primary.enabled = False
+    config.upstream.profiles.append(primary)
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    assert UpstreamService(config).selected_profile() is None
+
+    runner = ScriptedConnectRunner(fail_servers=set(), tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        assert service.recover() is True
+    finally:
+        runner.close()
+
+    assert service.selected_profile() is not None
+    assert service.selected_profile().name == "backup"
+    dialed_hosts = {
+        call[-1].split(":")[0] for call in runner.calls if call[0] == "openconnect"
+    }
+    assert "vpn.example.com" not in dialed_hosts
+
+
+def test_recover_returns_false_when_every_profile_is_disabled(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = _profile("primary")
+    profile.enabled = False
+    config.upstream.profiles.append(profile)
+
+    assert UpstreamService(config).recover() is False
+
+
+def test_enforce_profile_enablement_dials_disconnected_standbys(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.failover = False
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers=set(), tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        results = service.enforce_profile_enablement()
+        assert len(results) == 1
+        connections = {
+            entry["profile"]: entry["connected"] for entry in service.status().connections
+        }
+        assert connections["backup"] is True
+        # Never switched: the active profile is untouched even though the
+        # standby is now connected too.
+        assert service.selected_profile() is not None
+        assert service.selected_profile().name == "primary"
+    finally:
+        runner.close()
+
+
+def test_enforce_profile_enablement_skips_already_connected_standby(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers=set(), tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        service.connect("backup")
+        results = service.enforce_profile_enablement()
+    finally:
+        runner.close()
+
+    assert results == []
+
+
+def test_enforce_profile_enablement_logs_and_continues_on_failure(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers={"backup.example.com"}, tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        results = service.enforce_profile_enablement()
+    finally:
+        runner.close()
+
+    assert results == []
+    log = (config.system.log_dir / "upstream.log").read_text(encoding="utf-8")
+    assert "standby connect to 'backup' failed" in log
+
+
+def test_enforce_profile_enablement_never_dials_a_disabled_standby(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    backup = _profile("backup", server="backup.example.com")
+    backup.enabled = False
+    config.upstream.profiles.append(backup)
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers=set(), tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        results = service.enforce_profile_enablement()
+    finally:
+        runner.close()
+
+    assert results == []
+
+
+def test_enforce_profile_enablement_disconnects_a_standby_that_became_disabled(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers=set(), tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        service.connect("backup")
+        config.upstream.profiles[1].enabled = False
+
+        results = service.enforce_profile_enablement()
+
+        assert len(results) == 1
+        connections = {
+            entry["profile"]: entry["connected"] for entry in service.status().connections
+        }
+        assert connections["backup"] is False
+    finally:
+        runner.close()
+
+
+def test_enforce_profile_enablement_disconnects_the_active_profile_once_disabled(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers=set(), tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+
+    try:
+        service.connect_active()
+        config.upstream.profiles[0].enabled = False
+
+        # Disabling drops selected_profile() entirely -- no auto-promotion
+        # of a replacement -- yet the (now merely disabled) profile still
+        # needs tearing down.
+        assert service.selected_profile() is None
+        results = service.enforce_profile_enablement()
+
+        assert len(results) == 1
+        assert service.status().connected is False
+    finally:
+        runner.close()
+
+
+def test_selected_profile_skips_disabled_active_profile_config_default(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    profile = _profile("primary")
+    profile.enabled = False
+    config.upstream.profiles.append(profile)
+
+    assert config.upstream.selected_profile() is None
+    assert UpstreamService(config).selected_profile() is None
+
+
+def test_profile_interface_first_profile_keeps_global_interface(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.interface = "oc-bl4ck0"
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    service = UpstreamService(config)
+
+    assert service.profile_interface(config.upstream.profiles[0]) == "oc-bl4ck0"
+    assert service.profile_interface(config.upstream.profiles[1]) == "oc-up1"
+
+
+def test_profile_interface_explicit_value_wins(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="backup",
+        server="backup.example.com",
+        auth_type="password",
+        username="user",
+        interface="oc-custom7",
+    )
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(profile)
+
+    assert UpstreamService(config).profile_interface(profile) == "oc-custom7"
+
+
+def test_duplicate_effective_interfaces_are_rejected() -> None:
+    with pytest.raises(ValueError, match="distinct interfaces"):
+        AppConfig.model_validate(
+            {
+                "upstream": {
+                    "interface": "oc-x0",
+                    "profiles": [
+                        {
+                            "name": "a",
+                            "server": "a.example.com",
+                            "auth_type": "password",
+                            "username": "u",
+                            "interface": "oc-x0",
+                        },
+                        {
+                            "name": "b",
+                            "server": "b.example.com",
+                            "auth_type": "password",
+                            "username": "u",
+                            "interface": "oc-x0",
+                        },
+                    ],
+                }
+            }
+        )
+
+
+def test_connect_standby_profile_does_not_touch_policy_routing(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner(tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        service.connect("backup")
+    finally:
+        runner.close()
+
+    openconnect_call = runner.call_for("openconnect")
+    assert "oc-up1" in openconnect_call["argv"]
+    assert not any(
+        call["argv"][:3] == ["ip", "route", "replace"] for call in runner.calls
+    )
+
+
+def test_switch_profile_repoints_rules_without_reconnecting(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(
+        UpstreamProfileConfig(
+            name="backup",
+            server="backup.example.com",
+            auth_type="password",
+            username="user",
+            interface="oc-backup0",
+        )
+    )
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner()
+    service = UpstreamService(config, runner=runner)
+    process = _spawn_fake_openconnect(tmp_path)
+    backup_pid = service._pid_file(config.upstream.profiles[1])
+    backup_pid.parent.mkdir(parents=True, exist_ok=True)
+    backup_pid.write_text(str(process.pid))
+
+    service.switch_profile("backup")
+    process.terminate()
+
+    assert not any(call["argv"][0] == "openconnect" for call in runner.calls)
+    assert any(call["argv"][0] == "nft" for call in runner.calls)
+    ip_calls = [call["argv"] for call in runner.calls if call["argv"][0] == "ip"]
+    assert [
+        "ip", "route", "replace", "default", "dev", "oc-backup0", "table", "1201",
+    ] in ip_calls
+    assert service.selected_profile() is not None
+    assert service.selected_profile().name == "backup"
+
+
+def test_recover_adopts_already_connected_standby_without_dialing(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.failover = True
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    runner = ScriptedConnectRunner(fail_servers={"vpn.example.com"}, tmp_path=tmp_path)
+    service = UpstreamService(config, runner=runner)
+    process = _spawn_fake_openconnect(tmp_path)
+    backup_pid = service._pid_file(config.upstream.profiles[1])
+    backup_pid.parent.mkdir(parents=True, exist_ok=True)
+    backup_pid.write_text(str(process.pid))
+
+    assert service.recover() is True
+    process.terminate()
+    assert service.selected_profile() is not None
+    assert service.selected_profile().name == "backup"
+    dialed = [call for call in runner.calls if call[0] == "openconnect"]
+    # Only the failed retry of "primary" dialed; "backup" was adopted as-is.
+    assert all("backup.example.com" not in call[-1] for call in dialed)
+
+
+def test_status_reports_per_connection_details(tmp_path: Path) -> None:
+    process = _spawn_fake_openconnect(tmp_path)
+    pid = process.pid
+
+    class AddrRunner:
+        def run(self, argv: list[str], **kwargs: Any) -> CommandResult:
+            del kwargs
+            if argv[:4] == ["ip", "-j", "addr", "show"]:
+                payload = '[{"addr_info": [{"family": "inet", "local": "10.66.0.2"}]}]'
+                return CommandResult(argv=tuple(argv), returncode=0, stdout=payload, stderr="")
+            if argv[0] == "ss":
+                line = (
+                    "ESTAB 0 0 192.168.1.5:44444 203.0.113.77:39852 "
+                    f'users:(("openconnect",pid={pid},fd=5))'
+                )
+                return CommandResult(argv=tuple(argv), returncode=0, stdout=line, stderr="")
+            return CommandResult(argv=tuple(argv), returncode=0, stdout="", stderr="")
+
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(_profile("backup", server="backup.example.com"))
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config, runner=AddrRunner())
+    _write_pid(service, pid)
+
+    status = service.status()
+    process.terminate()
+
+    assert status.connected is True
+    assert status.local_ip == "10.66.0.2"
+    # Exit-node IP from the process's own socket, not the configured
+    # server:port (already shown in the profiles table).
+    assert status.remote == "203.0.113.77"
+    assert status.connections[0]["connected"] is True
+    assert status.connections[0]["interface"] == "oc-middle0"
+    assert status.connections[1]["connected"] is False
+    assert status.connections[1]["local_ip"] is None

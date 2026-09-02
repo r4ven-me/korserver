@@ -1,0 +1,640 @@
+from __future__ import annotations
+
+import base64
+import json
+import os
+import re
+import signal
+import time
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from korserver.config.models import AppConfig, UpstreamProfileConfig
+from korserver.services.command import CommandError, CommandResult, CommandRunner
+from korserver.services.files import FileManager
+from korserver.services.nftables import NftablesService
+from korserver.services.policy_routing import PolicyRoutingService
+
+RESOLV_CONF = Path("/etc/resolv.conf")
+VPNC_MARKER = "#@VPNC_GENERATED@"
+DISCONNECT_GRACE_SECONDS = 5
+# openconnect's --background parent exits 0 the moment it forks into the
+# background, before the daemon finishes binding the tun device -- a
+# failure past that point (e.g. the tun interface name already being in
+# use) kills the daemon within well under a second with no way for the
+# parent to report it. See _verify_backgrounded.
+BACKGROUND_GRACE_SECONDS = 2
+
+
+@dataclass(frozen=True)
+class UpstreamStatus:
+    enabled: bool
+    active_profile: str | None
+    interface: str
+    connected: bool
+    local_ip: str | None = None
+    remote: str | None = None
+    connections: list[dict[str, object]] = field(default_factory=list)
+
+
+class UpstreamService:
+    def __init__(
+        self,
+        config: AppConfig,
+        runner: CommandRunner | None = None,
+        files: FileManager | None = None,
+        nftables: NftablesService | None = None,
+        policy_routing: PolicyRoutingService | None = None,
+    ) -> None:
+        self.config = config
+        self.runner = runner or CommandRunner()
+        self.files = files or FileManager()
+        self.nftables = nftables or NftablesService(config, runner=self.runner)
+        self.policy_routing = policy_routing or PolicyRoutingService(config, runner=self.runner)
+        self.active_profile_file = config.system.generated_dir / "active-upstream"
+        # Pre-multi-connection releases kept a single pid file; profiles
+        # connected before an upgrade are still found through it (see
+        # _read_pid's fallback for the active profile).
+        self.legacy_pid_file = config.system.generated_dir / "upstream.pid"
+        self.log_file = config.system.log_dir / "upstream.log"
+
+    def list_profiles(self) -> list[UpstreamProfileConfig]:
+        return self.config.upstream.profiles
+
+    def selected_profile(self) -> UpstreamProfileConfig | None:
+        """The runtime-switched active profile (active_profile_file), or
+        the config's default if nothing was switched at runtime.
+
+        A disabled profile is never returned, even if it's still the
+        on-disk marker (e.g. it was switched to, then disabled later) --
+        see UpstreamConfig.selected_profile for why falling through
+        doesn't auto-promote a replacement.
+        """
+        profiles = {profile.name: profile for profile in self.config.upstream.profiles}
+        for line in self.files.read_lines(self.active_profile_file):
+            name = line.strip()
+            if name and name in profiles:
+                profile = profiles[name]
+                return profile if profile.enabled else None
+        return self.config.upstream.selected_profile()
+
+    def _profile_by_name(self, name: str) -> UpstreamProfileConfig:
+        for profile in self.config.upstream.profiles:
+            if profile.name == name:
+                return profile
+        raise ValueError(f"unknown upstream profile: {name}")
+
+    def profile_interface(self, profile: UpstreamProfileConfig) -> str:
+        return self.config.upstream.profile_interface(profile)
+
+    def active_interface(self) -> str:
+        selected = self.selected_profile()
+        if selected is None:
+            return self.config.upstream.interface
+        return self.profile_interface(selected)
+
+    def status(self) -> UpstreamStatus:
+        selected = self.selected_profile()
+        connections: list[dict[str, object]] = []
+        active_connected = False
+        active_local: str | None = None
+        active_remote: str | None = None
+        for profile in self.config.upstream.profiles:
+            interface = self.profile_interface(profile)
+            connected = self._profile_connected(profile)
+            local_ip = self._interface_address(interface) if connected else None
+            remote = self._remote_address(profile) if connected else None
+            connections.append(
+                {
+                    "profile": profile.name,
+                    "interface": interface,
+                    "connected": connected,
+                    "local_ip": local_ip,
+                    "remote": remote,
+                }
+            )
+            if selected and profile.name == selected.name:
+                active_connected = connected
+                active_local = local_ip
+                active_remote = remote
+        return UpstreamStatus(
+            enabled=self.config.upstream.enabled,
+            active_profile=selected.name if selected else None,
+            interface=self.active_interface(),
+            connected=active_connected,
+            local_ip=active_local,
+            remote=active_remote,
+            connections=connections,
+        )
+
+    def _pid_file(self, profile: UpstreamProfileConfig) -> Path:
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", profile.name)
+        return self.config.system.generated_dir / f"upstream-{safe_name}.pid"
+
+    def _read_pid(self, profile: UpstreamProfileConfig) -> int | None:
+        for path in (self._pid_file(profile), *self._legacy_pid_candidates(profile)):
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+            if content.isdigit():
+                return int(content)
+        return None
+
+    def _legacy_pid_candidates(self, profile: UpstreamProfileConfig) -> list[Path]:
+        selected = self.selected_profile()
+        if selected is not None and selected.name == profile.name:
+            return [self.legacy_pid_file]
+        return []
+
+    @staticmethod
+    def _is_running(pid: int) -> bool:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return False
+        except PermissionError:
+            pass
+        # Guard against pid-number recycling: a stale pid file (e.g. left
+        # behind by a container restart, which resets the pid namespace)
+        # must not make an unrelated long-lived process that inherited the
+        # number look like our connection forever.
+        try:
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+        except OSError:
+            return True  # /proc entry unreadable -- keep the kill(0) answer
+        return b"openconnect" in cmdline
+
+    def _profile_connected(self, profile: UpstreamProfileConfig) -> bool:
+        pid = self._read_pid(profile)
+        return pid is not None and self._is_running(pid)
+
+    def _interface_address(self, interface: str) -> str | None:
+        result = self.runner.run(
+            ["ip", "-j", "addr", "show", "dev", interface],
+            timeout=5,
+            check=False,
+        )
+        if not result.ok:
+            return None
+        try:
+            entries = json.loads(result.stdout)
+        except json.JSONDecodeError:
+            return None
+        for entry in entries if isinstance(entries, list) else []:
+            for addr in entry.get("addr_info", []):
+                if addr.get("family") == "inet" and addr.get("local"):
+                    return str(addr["local"])
+        return None
+
+    def _remote_address(self, profile: UpstreamProfileConfig) -> str | None:
+        """Public IP this profile's openconnect is actually talking to.
+
+        Read from the process's own established socket (ss, matched by the
+        pid we already track) rather than the configured server name: the
+        panel already shows server:port in the profiles table, and after
+        DNS round-robin or a redirect the live endpoint may differ from it
+        anyway.
+        """
+        pid = self._read_pid(profile)
+        if pid is None:
+            return None
+        result = self.runner.run(["ss", "-H", "-tnp"], timeout=5, check=False)
+        if not result.ok:
+            return None
+        for line in result.stdout.splitlines():
+            if f"pid={pid}," not in line:
+                continue
+            parts = line.split()
+            if len(parts) >= 5:
+                # Peer column is "ip:port" (or "[v6]:port"); the port is
+                # already visible in the profiles table, keep the IP only.
+                return parts[4].rsplit(":", 1)[0].strip("[]")
+        return None
+
+    def switch_profile(self, name: str) -> None:
+        """Make `name` the active profile and re-point the redirection
+        rules (nftables oifname + policy-route device) at its tunnel.
+
+        The connection itself is untouched -- with several profiles
+        connected simultaneously this is what makes failover a rule flip
+        rather than a reconnect.
+        """
+        profile = self._profile_by_name(name)
+        self.files.atomic_write_text(self.active_profile_file, f"{name}\n", mode=0o600)
+        if self.config.routing.mode != "direct":
+            interface = self.profile_interface(profile)
+            self.nftables.apply(outbound_interface=interface)
+            if self._profile_connected(profile):
+                self.policy_routing.apply(interface)
+
+    def _profile_secrets_dir(self, profile: UpstreamProfileConfig) -> Path:
+        return self.config.system.secrets_dir / "upstream" / profile.name
+
+    def _materialize_cert(self, profile: UpstreamProfileConfig) -> tuple[Path | None, Path | None]:
+        """Resolve on-disk cert/key paths, decoding any base64-provided content.
+
+        cert_file/key_file (a path already on this host) and
+        cert_file_base64/key_file_base64 (uploaded or pasted content) are
+        mutually exclusive per field (enforced by UpstreamProfileConfig);
+        base64 content is decoded into the profile's own secrets
+        subdirectory right before connecting.
+        """
+        cert_path = profile.cert_file
+        key_path = profile.key_file
+        if profile.cert_file_base64 or profile.key_file_base64:
+            self.files.ensure_dir(self._profile_secrets_dir(profile), mode=0o700)
+        if profile.cert_file_base64:
+            cert_path = self._profile_secrets_dir(profile) / "cert"
+            self.files.atomic_write_bytes(cert_path, base64.b64decode(profile.cert_file_base64))
+        if profile.key_file_base64:
+            key_path = self._profile_secrets_dir(profile) / "key"
+            self.files.atomic_write_bytes(key_path, base64.b64decode(profile.key_file_base64))
+        return cert_path, key_path
+
+    def openconnect_argv(self, profile: UpstreamProfileConfig) -> list[str]:
+        server = f"{profile.server}:{profile.port}"
+        if profile.camouflage_secret:
+            server = f"{server}/?{profile.camouflage_secret}"
+        argv = [
+            "openconnect",
+            "--interface",
+            self.profile_interface(profile),
+            "--protocol=anyconnect",
+            "--non-inter",
+            "--background",
+            f"--pid-file={self._pid_file(profile)}",
+        ]
+        if self.config.routing.mode in ("full", "split"):
+            # In full/split the fwmark policy routing owns all tunnel egress;
+            # the distribution vpnc-script would additionally apply whatever
+            # the upstream pushes (default route, split routes, resolv.conf)
+            # to this namespace -- on network_mode: host that hijacks the
+            # host itself. Use the minimal interface-only script instead.
+            argv.append(f"--script={self._ensure_vpnc_script()}")
+        if profile.trusted_cert:
+            argv.append("--no-cert-check")
+        if profile.server_cert_pin:
+            argv.extend(["--servercert", profile.server_cert_pin])
+        if profile.auth_type == "password":
+            argv.append("--passwd-on-stdin")
+            if profile.username:
+                argv.extend(["--user", profile.username])
+        elif profile.auth_type in {"cert", "p12"}:
+            cert_path, key_path = self._materialize_cert(profile)
+            if cert_path:
+                argv.extend(["--certificate", str(cert_path)])
+                if key_path:
+                    argv.extend(["--sslkey", str(key_path)])
+                if profile.cert_pass:
+                    argv.append(f"--key-password={profile.cert_pass}")
+        argv.append(server)
+        return argv
+
+    def _ensure_vpnc_script(self) -> Path:
+        """Install the interface-only vpnc-script into generated_dir.
+
+        Copied from the shipped template on every connect so an image
+        update propagates without manual steps; must be executable for
+        openconnect to run it.
+        """
+        from korserver.renderers.base import default_template_dir
+
+        source = default_template_dir() / "vpnc-script-korserver"
+        target = self.config.system.generated_dir / "vpnc-script-korserver"
+        self.files.ensure_dir(target.parent)
+        self.files.atomic_write_text(target, source.read_text(encoding="utf-8"), mode=0o755)
+        return target
+
+    def _repair_stale_resolv_conf(self) -> None:
+        """Clear a leftover vpnc-script marker from a previously killed connect.
+
+        vpnc-script only backs up /etc/resolv.conf when it does NOT already
+        carry this marker (`grep ... || cp ... "$RESOLV_CONF_BACKUP"`); if an
+        earlier attempt was killed (e.g. our own connect timeout) before it
+        could run its disconnect cleanup and restore the file, the marker is
+        left behind. Every later connect then sees the marker, skips its own
+        backup, and immediately fails trying to read a backup file that (from
+        that run's point of view) was never created:
+        "cannot open .../resolv.conf-backup.<pid>: No such file". There is no
+        way to recover the true pre-VPN content at this point; stripping the
+        marker just lets the next connect start clean instead of failing
+        forever.
+        """
+        try:
+            content = RESOLV_CONF.read_text(encoding="utf-8")
+        except OSError:
+            return
+        lines = content.splitlines()
+        if not lines or not lines[0].startswith(VPNC_MARKER):
+            return
+        remaining = [
+            line
+            for line in lines[1:]
+            if not line.startswith("# and will be overwritten by vpnc")
+            and not line.startswith("# as long as the above mark is intact")
+        ]
+        self.files.atomic_write_text(
+            RESOLV_CONF, "\n".join(remaining) + ("\n" if remaining else ""), mode=0o644
+        )
+
+    def _append_log(self, line: str) -> None:
+        try:
+            self.log_file.parent.mkdir(parents=True, exist_ok=True)
+            with self.log_file.open("a", encoding="utf-8") as handle:
+                handle.write(line if line.endswith("\n") else f"{line}\n")
+        except OSError:
+            pass
+
+    def connect(self, name: str | None = None, *, dry_run: bool = False) -> CommandResult:
+        """Dial one profile's connection (the active one when name is None).
+
+        Standby profiles connect without touching routing: their tunnels
+        just sit ready so a later switch/failover is instant.
+        """
+        profile = self._profile_by_name(name) if name else self.selected_profile()
+        if profile is None:
+            raise ValueError("no upstream profile configured")
+        if not dry_run and self._profile_connected(profile):
+            # Idempotent, mirroring disconnect's "not connected" no-op: the
+            # watchdog auto-connects in the background, so a manual Connect
+            # click can legitimately race an already-established tunnel --
+            # that's a state to report, not an error to scare with.
+            return CommandResult(
+                argv=("openconnect", "<already-running>"),
+                returncode=0,
+                stdout=f"profile '{profile.name}' is already connected",
+                stderr="",
+            )
+        selected = self.selected_profile()
+        is_active = selected is not None and selected.name == profile.name
+        if not dry_run:
+            self._repair_stale_resolv_conf()
+            if self.config.routing.mode != "direct":
+                # Load the split/full-mode kill-switch rules before dialing,
+                # so marked traffic is blocked from the very first moment
+                # rather than briefly leaking out unencrypted while
+                # connecting. Rules always point at the ACTIVE profile's
+                # interface, even when dialing a standby.
+                self.nftables.apply(outbound_interface=self.active_interface())
+        result = self.runner.run(
+            self.openconnect_argv(profile),
+            input_text=f"{profile.password}\n" if profile.password else None,
+            timeout=60,
+            graceful_timeout=5,
+            dry_run=dry_run,
+            output_file=self.log_file,
+            extra_secrets=[profile.password or "", profile.cert_pass or "", profile.port],
+        )
+        if not dry_run:
+            self._verify_backgrounded(profile, result)
+        if not dry_run and is_active:
+            # A failed connect already raised CommandError above, so
+            # reaching here means the tunnel is up and the interface
+            # actually exists -- only now can a route via it be installed.
+            self.policy_routing.apply(self.profile_interface(profile))
+        return result
+
+    def _verify_backgrounded(self, profile: UpstreamProfileConfig, result: CommandResult) -> None:
+        """Confirm the daemonized openconnect is still alive after --background.
+
+        The --background parent exits 0 as soon as it forks into the
+        background -- BEFORE the daemon finishes binding the tun device.
+        A failure past that point (e.g. "Failed to bind local tun device
+        (TUNSETIFF): Device or resource busy", one real-world cause: the
+        interface name is still held by another still-negotiating attempt
+        for the same profile) kills the daemon within well under a second,
+        with no way for the already-exited parent to report it -- runner.run
+        returns a clean success. Without this check, connect() would look
+        successful, recover() would log a false "reconnected", and the
+        watchdog's next few health-check ticks would find the process gone
+        and retry the same doomed dial forever, each cycle logging a
+        misleading success followed by silence instead of a visible error.
+        """
+        deadline = time.monotonic() + BACKGROUND_GRACE_SECONDS
+        while not self._profile_connected(profile) and time.monotonic() < deadline:
+            time.sleep(0.2)
+        if self._profile_connected(profile):
+            return
+        raise CommandError(
+            CommandResult(
+                argv=result.argv,
+                returncode=1,
+                stdout=result.stdout,
+                stderr=(
+                    f"{result.stderr}\nopenconnect backgrounded but the process was "
+                    f"gone moments later; see {self.log_file} for the actual failure "
+                    "(e.g. the tun interface name already in use)"
+                ).strip(),
+            )
+        )
+
+    def connect_active(self, *, dry_run: bool = False) -> CommandResult:
+        return self.connect(dry_run=dry_run)
+
+    def disconnect(self, name: str | None = None, *, dry_run: bool = False) -> CommandResult:
+        """Tear down one profile's backgrounded openconnect (active when
+        name is None).
+
+        openconnect's --pid-file records the PID of the daemonized process;
+        SIGTERM there runs its normal cleanup (vpnc-script disconnect,
+        restoring /etc/resolv.conf) before it exits and removes its own
+        pid-file. A grace period is given before SIGKILL, same reasoning as
+        CommandRunner's graceful_timeout: an unconditional kill would leave
+        resolv.conf in the same half-modified state this service otherwise
+        repairs on the next connect.
+        """
+        profile = self._profile_by_name(name) if name else self.selected_profile()
+        pid = self._read_pid(profile) if profile is not None else None
+        if profile is None or pid is None or not self._is_running(pid):
+            return CommandResult(
+                argv=("kill", "-TERM", "<upstream-pid>"),
+                returncode=0,
+                stdout="not connected",
+                stderr="",
+                dry_run=dry_run,
+            )
+        argv = ("kill", "-TERM", str(pid))
+        if dry_run:
+            return CommandResult(argv=argv, returncode=0, stdout="", stderr="", dry_run=True)
+        self._append_log(f"--- disconnect '{profile.name}' requested (pid {pid}) ---")
+        os.kill(pid, signal.SIGTERM)
+        deadline = time.monotonic() + DISCONNECT_GRACE_SECONDS
+        while time.monotonic() < deadline and self._is_running(pid):
+            time.sleep(0.2)
+        if self._is_running(pid):
+            self._append_log(
+                f"pid {pid} did not exit within {DISCONNECT_GRACE_SECONDS}s, sending SIGKILL"
+            )
+            os.kill(pid, signal.SIGKILL)
+        selected = self.selected_profile()
+        if selected is not None and selected.name == profile.name:
+            # Only the active profile's tunnel carries the policy route;
+            # dropping a standby connection must not touch routing.
+            self.policy_routing.cleanup()
+        self._append_log(f"'{profile.name}' disconnected")
+        return CommandResult(argv=argv, returncode=0, stdout="disconnected", stderr="")
+
+    def healthcheck(self, *, dry_run: bool = False) -> CommandResult | None:
+        profile = self.selected_profile()
+        if profile is None or not profile.check_host:
+            return None
+        # -I <tunnel>: the check must prove the TUNNEL works, not the host's
+        # uplink. Without it a check_host that also answers via the normal
+        # route (e.g. 1.1.1.1) keeps reporting healthy forever while the
+        # tunnel is actually dead, so the watchdog never recovers.
+        #
+        # -c 3: a single packet is a coin flip on any link with real-world
+        # loss, especially seconds after a fresh reconnect while ARP/routing
+        # is still settling -- ping still exits 0 the instant one reply
+        # comes back, so this only ever adds latency on an already-unhealthy
+        # tunnel, never on a healthy one.
+        return self.runner.run(
+            [
+                "ping",
+                "-I",
+                self.profile_interface(profile),
+                "-c",
+                "3",
+                "-i",
+                "0.3",
+                "-W",
+                "2",
+                profile.check_host,
+            ],
+            timeout=8,
+            check=False,
+            dry_run=dry_run,
+        )
+
+    def is_healthy(self) -> bool:
+        """Whether the active connection currently looks good: the
+        backgrounded process is alive and, if a check_host is configured,
+        it still answers."""
+        profile = self.selected_profile()
+        if profile is None or not self._profile_connected(profile):
+            return False
+        result = self.healthcheck()
+        return result is None or result.ok
+
+    def ensure_policy_routing(self) -> list[CommandResult]:
+        """Re-assert the fwmark rule/route for the active connected profile.
+
+        Run by the watchdog on every healthy tick: the kernel purges every
+        route referencing the tunnel device whenever it bounces (openconnect
+        reconnects internally without going through this service), leaving a
+        'connected' upstream whose fwmark table is empty -- marked traffic
+        then dies in the kill-switch until something re-installs the route.
+        """
+        if self.config.routing.mode == "direct":
+            return []
+        profile = self.selected_profile()
+        if profile is None or not self._profile_connected(profile):
+            return []
+        return self.policy_routing.ensure(self.profile_interface(profile))
+
+    def enforce_profile_enablement(self) -> list[CommandResult]:
+        """Bring every profile's connection up to date with its own
+        `enabled` flag, besides the active one (which the watchdog's
+        health-check/recover cycle already owns):
+
+        - enabled and down -> dial it, keeping it warm.
+        - disabled and up -> tear it down.
+
+        Deliberately unconditional on upstream.failover: staying connected
+        and being eligible for automatic switching are separate concerns.
+        With failover on, keeping standbys warm is what makes recover()
+        switch instantly instead of paying for a fresh handshake
+        mid-outage; with failover off, it just keeps them ready (e.g. for
+        a manual switch later) without ever making them active --
+        switch_profile() is never called here. A disabled profile is never
+        connected regardless of failover, including the profile that used
+        to be active: selected_profile() already stops treating a disabled
+        profile as active, so it naturally falls out of "active" here too
+        and gets torn down like any other disabled profile.
+        """
+        selected = self.selected_profile()
+        active_name = selected.name if selected else None
+        results: list[CommandResult] = []
+        for profile in self.config.upstream.profiles:
+            connected = self._profile_connected(profile)
+            if not profile.enabled:
+                if connected:
+                    results.append(self.disconnect(profile.name))
+                continue
+            if profile.name == active_name or connected:
+                continue
+            try:
+                results.append(self.connect(profile.name))
+            except (ValueError, CommandError):
+                self._append_log(f"standby connect to '{profile.name}' failed")
+        return results
+
+    def recover(self) -> bool:
+        """Restore upstream connectivity after health-check failures.
+
+        The active profile is retried first (reconnect). With
+        upstream.failover enabled and several profiles configured, the
+        next profiles in list order (wrapping around) are tried after
+        that -- and a standby whose tunnel is already up is adopted by
+        just switching the redirection rules to it, no dialing.
+        """
+        profiles = self.config.upstream.profiles
+        if not profiles:
+            return False
+        # Only ever consider enabled profiles here: selected_profile() already
+        # refuses to report a disabled profile as active (see its docstring),
+        # so falling back to profiles[0] without the same filter could pick a
+        # disabled one right back up -- connect() doesn't itself check
+        # `enabled`, so it would dial successfully, and the next
+        # enforce_profile_enablement() tick would immediately tear it back
+        # down again, live-locking recover() against its own watchdog.
+        names = [profile.name for profile in profiles if profile.enabled]
+        if not names:
+            self._append_log("no enabled upstream profile to recover")
+            return False
+        active = self.selected_profile()
+        # Track separately from current_name: when there's no genuinely
+        # active profile (active is None -- e.g. the one on record was
+        # disabled), current_name falls back to names[0] as a search
+        # starting point only. That fallback was never actually granted the
+        # redirection rules, so it must still go through switch_profile()
+        # below like any other failover target -- treating it as "already
+        # active" purely because its name matches the fallback would leave
+        # a connected-but-not-redirected tunnel.
+        already_active = active is not None
+        current_name = active.name if active else names[0]
+        if self.config.upstream.failover and len(names) > 1:
+            start = names.index(current_name) if current_name in names else 0
+            order = [names[(start + offset) % len(names)] for offset in range(len(names))]
+        else:
+            order = [current_name]
+
+        for name in order:
+            profile = self._profile_by_name(name)
+            is_current_and_active = name == current_name and already_active
+            if is_current_and_active:
+                # The active connection is the one that failed its checks:
+                # a live-but-unhealthy process must be torn down before
+                # redialing, and a dead one leaves nothing to keep.
+                if self._profile_connected(profile):
+                    self.disconnect(name)
+                try:
+                    self.connect(name)
+                except (ValueError, CommandError):
+                    self._append_log(f"reconnect attempt to '{name}' failed")
+                    continue
+            elif not self._profile_connected(profile):
+                try:
+                    self.connect(name)
+                except (ValueError, CommandError):
+                    self._append_log(f"failover connect to '{name}' failed")
+                    continue
+            if is_current_and_active:
+                self._append_log(f"reconnected to '{name}'")
+            else:
+                self.switch_profile(name)
+                self._append_log(f"failed over to '{name}' (redirection rules switched)")
+            return True
+        self._append_log("all reconnect attempts failed")
+        return False

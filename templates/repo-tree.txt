@@ -1,0 +1,36 @@
+.
+├── backend/
+│   └── korserver/
+│       ├── __init__.py
+│       ├── __main__.py
+│       ├── cli.py
+│       ├── main.py
+│       ├── api/
+│       ├── config/
+│       ├── services/
+│       ├── renderers/
+│       └── schemas/
+├── frontend/
+│   ├── package.json
+│   ├── tsconfig.json
+│   ├── vite.config.ts
+│   └── src/
+├── templates/
+│   ├── ocserv.conf.j2
+│   ├── dnsmasq.conf.j2
+│   ├── nftables.nft.j2
+│   └── supervisor.conf.j2
+├── tests/
+│   ├── test_config_loader.py
+│   ├── test_env_override.py
+│   ├── test_ocserv_render.py
+│   ├── test_dnsmasq_render.py
+│   └── test_nftables_render.py
+├── docs/
+├── Dockerfile
+├── compose.yaml
+├── pyproject.toml
+├── config.example.yaml
+├── .env.example
+├── Makefile
+└── README.md

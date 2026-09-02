@@ -1,0 +1,12 @@
+services:
+  korserver:
+    environment:
+      KORSERVER_WEB__ENABLED: "true"
+      KORSERVER_WEB__LISTEN: 0.0.0.0
+      KORSERVER_WEB__PORT: "8443"
+      KORSERVER_WEB__TLS: "false"
+      KORSERVER_WEB__ALLOW_INSECURE_HTTP: "true"
+      KORSERVER_WEB__TRUSTED_PROXIES: ${KORSERVER_WEB__TRUSTED_PROXIES:-[]}
+      KORSERVER_WEB__ADMIN_PASSWORD: ${KORSERVER_ADMIN_PASSWORD:-change-me}
+    ports:
+      - "127.0.0.1:8443:8443/tcp"
