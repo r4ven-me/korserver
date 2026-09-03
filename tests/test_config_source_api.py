@@ -9,8 +9,14 @@ from korserver.api.app import create_app
 
 
 def _client(config_path: Path) -> TestClient:
+    root = config_path.parent
     config_path.write_text(
-        """
+        f"""
+system:
+  data_dir: {root / "data"}
+  generated_dir: {root / "generated"}
+  log_dir: {root / "logs"}
+  secrets_dir: {root / "secrets"}
 web:
   enabled: true
   listen: 127.0.0.1

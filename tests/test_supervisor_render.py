@@ -45,7 +45,8 @@ def test_supervisor_render_adds_certbot_auto_renew(tmp_path: Path) -> None:
                     "enabled": True,
                     "domains": ["vpn.example.com"],
                     "auto_renew_enabled": True,
-                    "auto_renew_interval_hours": 168,
+                    "auto_renew_interval": 7,
+                    "auto_renew_interval_unit": "days",
                 }
             },
         },
@@ -56,7 +57,6 @@ def test_supervisor_render_adds_certbot_auto_renew(tmp_path: Path) -> None:
 
     assert "[program:certbot-renew]" in rendered
     assert "certbot --config-dir" in rendered
-    # Legacy hours-based config still renders the same weekly sleep.
     assert "sleep 604800" in rendered
 
 

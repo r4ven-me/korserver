@@ -6,16 +6,11 @@ from typing import Any, Literal, NoReturn, cast
 
 import yaml
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator
 
 from korserver.api.auth import require_admin
 from korserver.config.loader import load_config
-from korserver.config.models import (
-    AppConfig,
-    IntervalUnit,
-    LetsEncryptConfig,
-    migrate_auto_renew_interval_hours,
-)
+from korserver.config.models import AppConfig, IntervalUnit, LetsEncryptConfig
 from korserver.services.certificates import CertificateService
 from korserver.services.command import CommandError, CommandResult
 from korserver.services.config import ConfigService
@@ -29,11 +24,6 @@ router = APIRouter(dependencies=[Depends(require_admin)])
 class AutoRenewIntervalMixin(BaseModel):
     auto_renew_interval: int = Field(default=7, ge=1)
     auto_renew_interval_unit: IntervalUnit = "days"
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_interval_hours(cls, data: Any) -> Any:
-        return migrate_auto_renew_interval_hours(data)
 
 
 class LetsEncryptIssueRequest(AutoRenewIntervalMixin):

@@ -52,10 +52,6 @@ class UpstreamService:
         self.nftables = nftables or NftablesService(config, runner=self.runner)
         self.policy_routing = policy_routing or PolicyRoutingService(config, runner=self.runner)
         self.active_profile_file = config.system.generated_dir / "active-upstream"
-        # Pre-multi-connection releases kept a single pid file; profiles
-        # connected before an upgrade are still found through it (see
-        # _read_pid's fallback for the active profile).
-        self.legacy_pid_file = config.system.generated_dir / "upstream.pid"
         self.log_file = config.system.log_dir / "upstream.log"
 
     def list_profiles(self) -> list[UpstreamProfileConfig]:
@@ -132,20 +128,11 @@ class UpstreamService:
         return self.config.system.generated_dir / f"upstream-{safe_name}.pid"
 
     def _read_pid(self, profile: UpstreamProfileConfig) -> int | None:
-        for path in (self._pid_file(profile), *self._legacy_pid_candidates(profile)):
-            try:
-                content = path.read_text(encoding="utf-8").strip()
-            except OSError:
-                continue
-            if content.isdigit():
-                return int(content)
-        return None
-
-    def _legacy_pid_candidates(self, profile: UpstreamProfileConfig) -> list[Path]:
-        selected = self.selected_profile()
-        if selected is not None and selected.name == profile.name:
-            return [self.legacy_pid_file]
-        return []
+        try:
+            content = self._pid_file(profile).read_text(encoding="utf-8").strip()
+        except OSError:
+            return None
+        return int(content) if content.isdigit() else None
 
     @staticmethod
     def _is_running(pid: int) -> bool:

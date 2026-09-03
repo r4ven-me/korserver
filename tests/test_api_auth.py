@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from korserver.api.app import create_app
@@ -46,9 +48,21 @@ def test_auth_me_returns_authenticated_identity() -> None:
     }
 
 
-def test_cookie_session_requires_csrf_for_mutations() -> None:
+def test_cookie_session_requires_csrf_for_mutations(tmp_path: Path) -> None:
     client = TestClient(
-        create_app(AppConfig.model_validate({"web": {"admin_password": "secret"}})),
+        create_app(
+            AppConfig.model_validate(
+                {
+                    "system": {
+                        "data_dir": str(tmp_path / "data"),
+                        "generated_dir": str(tmp_path / "generated"),
+                        "log_dir": str(tmp_path / "logs"),
+                        "secrets_dir": str(tmp_path / "secrets"),
+                    },
+                    "web": {"admin_password": "secret"},
+                }
+            )
+        ),
         base_url="https://testserver",
     )
     login_response = client.post(

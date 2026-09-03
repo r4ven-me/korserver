@@ -1,16 +1,23 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from korserver.api.app import create_app
 from korserver.config.models import AppConfig
 
 
-def test_user_config_validation_error_is_readable() -> None:
+def test_user_config_validation_error_is_readable(tmp_path: Path) -> None:
     config = AppConfig.model_validate(
         {
             "web": {"admin_password": "secret"},
-            "system": {"data_dir": "/tmp/korserver-test"},
+            "system": {
+                "data_dir": str(tmp_path / "data"),
+                "generated_dir": str(tmp_path / "generated"),
+                "log_dir": str(tmp_path / "logs"),
+                "secrets_dir": str(tmp_path / "secrets"),
+            },
         }
     )
     client = TestClient(create_app(config=config))

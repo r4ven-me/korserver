@@ -1,15 +1,29 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from korserver.api.app import create_app
 from korserver.config.models import AppConfig
 
 
-def test_terminal_session_requires_admin_auth() -> None:
-    config = AppConfig.model_validate(
-        {"web": {"admin_password": "secret", "terminal_enabled": True}}
+def _config(tmp_path: Path, **web: object) -> AppConfig:
+    return AppConfig.model_validate(
+        {
+            "system": {
+                "data_dir": str(tmp_path / "data"),
+                "generated_dir": str(tmp_path / "generated"),
+                "log_dir": str(tmp_path / "logs"),
+                "secrets_dir": str(tmp_path / "secrets"),
+            },
+            "web": {"admin_password": "secret", **web},
+        }
     )
+
+
+def test_terminal_session_requires_admin_auth(tmp_path: Path) -> None:
+    config = _config(tmp_path, terminal_enabled=True)
     client = TestClient(create_app(config))
 
     response = client.post("/api/terminal/sessions", json={"cwd": "/", "rows": 30, "cols": 100})
@@ -17,10 +31,8 @@ def test_terminal_session_requires_admin_auth() -> None:
     assert response.status_code == 401
 
 
-def test_terminal_session_returns_one_time_ticket() -> None:
-    config = AppConfig.model_validate(
-        {"web": {"admin_password": "secret", "terminal_enabled": True}}
-    )
+def test_terminal_session_returns_one_time_ticket(tmp_path: Path) -> None:
+    config = _config(tmp_path, terminal_enabled=True)
     client = TestClient(create_app(config))
 
     response = client.post(
@@ -36,8 +48,8 @@ def test_terminal_session_returns_one_time_ticket() -> None:
     assert len(payload["token"]) > 20
 
 
-def test_terminal_is_disabled_by_default() -> None:
-    config = AppConfig.model_validate({"web": {"admin_password": "secret"}})
+def test_terminal_is_disabled_by_default(tmp_path: Path) -> None:
+    config = _config(tmp_path)
     client = TestClient(create_app(config))
 
     response = client.post(

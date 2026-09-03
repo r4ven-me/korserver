@@ -1233,3 +1233,7 @@ docker compose down
 
 Korvus Server is licensed under the [GNU General Public License v3.0](LICENSE) or
 later.
+
+## Author
+
+Ivan Cherniy - [r4ven.me](https://r4ven.me) - [github.com/r4ven-me/korserver](https://github.com/r4ven-me/korserver)

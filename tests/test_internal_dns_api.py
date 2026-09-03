@@ -242,47 +242,6 @@ def test_internal_dns_status_lists_multiple_files_and_urls(tmp_path: Path) -> No
     assert all(entry["meta"] is None for entry in payload["blocklist_urls"])
 
 
-def test_internal_dns_settings_deletes_last_entry_migrated_from_legacy_field(
-    tmp_path: Path,
-) -> None:
-    """Regression test: a config saved back when only the singular
-    `blocklist_file`/`blocklist_url` fields existed still has that legacy
-    key sitting in the YAML file (the migrate_singular_blocklist_fields
-    validator only folds it into blocklist_files/urls in memory -- it never
-    scrubs the source key from what apply_config_patch writes back to
-    disk). Deleting every entry down to that last, legacy-sourced one and
-    saving an empty list used to resurrect it on the very next load: the
-    validator sees the legacy key still present and an empty (falsy)
-    blocklist_files, and folds it right back in."""
-    config_path = tmp_path / "config.yaml"
-    client = _client(
-        config_path,
-        tmp_path,
-        extra=(
-            "internal_dns:\n"
-            "  enabled: true\n"
-            "  blocklist_file: /legacy/blocklist.txt\n"
-            "  blocklist_files: [/legacy/blocklist.txt]\n"
-        ),
-    )
-
-    response = client.post(
-        "/api/internal-dns/settings",
-        auth=("admin", "secret"),
-        json={"enabled": True, "blocklist_files": []},
-    )
-    assert response.status_code == 200
-    assert response.json()["internal_dns"]["blocklist_files"] == []
-
-    status = client.get("/api/internal-dns/status", auth=("admin", "secret"))
-    assert status.json()["blocklist_files"] == []
-
-    # The legacy key is nulled out (not necessarily removed), which is
-    # enough to stop the migration validator from resurrecting it.
-    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert raw["internal_dns"].get("blocklist_file") is None
-
-
 def test_internal_dns_requires_auth(tmp_path: Path) -> None:
     client = _client(tmp_path / "config.yaml", tmp_path)
     assert client.get("/api/internal-dns/status").status_code == 401

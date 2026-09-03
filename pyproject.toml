@@ -9,7 +9,7 @@ description = "Korvus Server OpenConnect/ocserv VPN management platform"
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "GPL-3.0-or-later" }
-authors = [{ name = "korserver maintainers" }]
+authors = [{ name = "Ivan Cherniy" }]
 dependencies = [
   "fastapi>=0.111,<1",
   "jinja2>=3.1,<4",
@@ -28,6 +28,10 @@ dev = [
   "pytest>=8.2,<9",
   "ruff>=0.5,<1",
 ]
+
+[project.urls]
+Homepage = "https://r4ven.me"
+Repository = "https://github.com/r4ven-me/korserver"
 
 [project.scripts]
 korctl = "korserver.cli:app"

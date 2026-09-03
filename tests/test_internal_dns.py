@@ -192,20 +192,6 @@ def test_blocklist_url_must_be_http(tmp_path: Path) -> None:
         )
 
 
-def test_legacy_singular_blocklist_fields_still_load(tmp_path: Path) -> None:
-    config = _config(
-        tmp_path,
-        {
-            "internal_dns": {
-                "blocklist_file": "/var/lib/korserver/blocklist.txt",
-                "blocklist_url": "https://lists.example.com/hosts.txt",
-            }
-        },
-    )
-    assert config.internal_dns.blocklist_files == [Path("/var/lib/korserver/blocklist.txt")]
-    assert config.internal_dns.blocklist_urls == ["https://lists.example.com/hosts.txt"]
-
-
 def test_local_records_normalizes_hostname_and_ip(tmp_path: Path) -> None:
     config = _config(
         tmp_path,

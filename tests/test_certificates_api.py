@@ -85,31 +85,6 @@ def test_letsencrypt_settings_saves_interval_with_unit(tmp_path: Path) -> None:
     assert saved["certificates"]["letsencrypt"]["auto_renew_interval_unit"] == "weeks"
 
 
-def test_letsencrypt_settings_accepts_legacy_interval_hours(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.yaml"
-    client = _client(config_path, tmp_path)
-
-    response = client.post(
-        "/api/certificates/letsencrypt/settings",
-        auth=("admin", "secret"),
-        json={
-            "enabled": False,
-            "email": "admin@example.com",
-            "domains": ["vpn.example.com"],
-            "renew_reload": True,
-            "auto_renew_enabled": True,
-            "auto_renew_interval_hours": 168,
-            "http01_address": None,
-            "http01_port": 80,
-        },
-    )
-
-    assert response.status_code == 200
-    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert saved["certificates"]["letsencrypt"]["auto_renew_interval"] == 7
-    assert saved["certificates"]["letsencrypt"]["auto_renew_interval_unit"] == "days"
-
-
 def test_letsencrypt_settings_saves_custom_http01_address_and_port(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     client = _client(config_path, tmp_path)
@@ -123,7 +98,8 @@ def test_letsencrypt_settings_saves_custom_http01_address_and_port(tmp_path: Pat
             "domains": ["vpn.example.com"],
             "renew_reload": True,
             "auto_renew_enabled": True,
-            "auto_renew_interval_hours": 168,
+            "auto_renew_interval": 7,
+            "auto_renew_interval_unit": "days",
             "http01_address": "203.0.113.5",
             "http01_port": 8080,
         },
@@ -148,7 +124,8 @@ def test_letsencrypt_settings_blank_http01_address_stays_null(tmp_path: Path) ->
             "domains": ["vpn.example.com"],
             "renew_reload": True,
             "auto_renew_enabled": True,
-            "auto_renew_interval_hours": 168,
+            "auto_renew_interval": 7,
+            "auto_renew_interval_unit": "days",
             "http01_address": None,
             "http01_port": 80,
         },

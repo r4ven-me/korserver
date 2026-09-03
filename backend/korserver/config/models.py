@@ -171,30 +171,6 @@ class ServerConfig(StrictModel):
         return [_validate_cidr(item) for item in value]
 
 
-def migrate_auto_renew_interval_hours(data: Any) -> Any:
-    """Accept the pre-unit `auto_renew_interval_hours` field from old
-    configs/clients, converting it to value+unit (whole days when even)."""
-    if not isinstance(data, dict) or "auto_renew_interval_hours" not in data:
-        return data
-    hours = data.pop("auto_renew_interval_hours")
-    # The config loader merges user YAML over DEFAULT_CONFIG, so the new
-    # keys are always present with their defaults; only explicit
-    # non-default values may shadow a still-present legacy key.
-    if (
-        data.get("auto_renew_interval", 7) != 7
-        or data.get("auto_renew_interval_unit", "days") != "days"
-    ):
-        return data
-    if isinstance(hours, int) and hours >= 1:
-        if hours % 24 == 0:
-            data["auto_renew_interval"] = hours // 24
-            data["auto_renew_interval_unit"] = "days"
-        else:
-            data["auto_renew_interval"] = hours
-            data["auto_renew_interval_unit"] = "hours"
-    return data
-
-
 class LetsEncryptConfig(StrictModel):
     enabled: bool = False
     email: str | None = None
@@ -205,11 +181,6 @@ class LetsEncryptConfig(StrictModel):
     auto_renew_interval_unit: IntervalUnit = "days"
     http01_address: str | None = None
     http01_port: int = Field(default=80, ge=1, le=65535)
-
-    @model_validator(mode="before")
-    @classmethod
-    def _migrate_interval_hours(cls, data: Any) -> Any:
-        return migrate_auto_renew_interval_hours(data)
 
     @property
     def auto_renew_interval_seconds(self) -> int:
@@ -512,27 +483,6 @@ class InternalDnsConfig(StrictModel):
     log_queries: bool = False
     local_records: list[str] = Field(default_factory=list)
 
-    @model_validator(mode="before")
-    @classmethod
-    def migrate_singular_blocklist_fields(cls, data: Any) -> Any:
-        """Accept the pre-list `blocklist_file`/`blocklist_url` fields from
-        old configs/clients, folding each into its *_files/*_urls list."""
-        if not isinstance(data, dict) or not (
-            "blocklist_file" in data or "blocklist_url" in data
-        ):
-            return data
-        data = dict(data)
-        # The config loader merges user YAML over DEFAULT_CONFIG, so the new
-        # list keys are always present with their [] default; only an
-        # explicit non-empty list may shadow a still-present legacy key.
-        old_file = data.pop("blocklist_file", None)
-        if old_file and not data.get("blocklist_files"):
-            data["blocklist_files"] = [old_file]
-        old_url = data.pop("blocklist_url", None)
-        if old_url and not data.get("blocklist_urls"):
-            data["blocklist_urls"] = [old_url]
-        return data
-
     @field_validator("blocklist_domains")
     @classmethod
     def validate_blocklist_domains(cls, value: list[str]) -> list[str]:
@@ -638,7 +588,7 @@ class GroupPolicyConfig(StrictModel):
 
 class IdentityConfig(StrictModel):
     config_per_group_dir: Path | None = None
-    config_per_user_dir: Path | None = Path("/var/lib/korserver/generated/config-per-user")
+    config_per_user_dir: Path | None = None
     default_group_config: Path | None = None
     select_group_by_url: bool = False
     default_select_group: str | None = None

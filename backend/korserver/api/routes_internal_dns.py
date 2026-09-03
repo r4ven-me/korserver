@@ -50,15 +50,6 @@ def save_internal_dns_settings(
     patch = {
         "internal_dns": {
             "enabled": payload.enabled,
-            # Explicitly null out the pre-list singular fields: apply_config_patch
-            # persists the raw merged dict (not the migrated model), so a
-            # leftover blocklist_file/blocklist_url from an old config would
-            # otherwise survive on disk forever and get folded back into an
-            # empty blocklist_files/urls on every subsequent load -- making it
-            # impossible to actually delete the last entry once it originated
-            # from (or ever passed through) that legacy field.
-            "blocklist_file": None,
-            "blocklist_url": None,
             "blocklist_domains": payload.blocklist_domains,
             "blocklist_files": payload.blocklist_files,
             "blocklist_urls": payload.blocklist_urls,

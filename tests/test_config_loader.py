@@ -16,24 +16,6 @@ def test_load_config_defaults_when_file_is_missing(tmp_path: Path) -> None:
     assert config.certificates.letsencrypt.auto_renew_interval_unit == "days"
 
 
-def test_legacy_auto_renew_interval_hours_still_loads(tmp_path: Path) -> None:
-    config_path = tmp_path / "config.yaml"
-    config_path.write_text(
-        """
-certificates:
-  letsencrypt:
-    auto_renew_interval_hours: 36
-""",
-        encoding="utf-8",
-    )
-
-    le = load_config(config_path, environ={}).certificates.letsencrypt
-
-    assert le.auto_renew_interval == 36
-    assert le.auto_renew_interval_unit == "hours"
-    assert le.auto_renew_interval_seconds == 36 * 3600
-
-
 def test_auto_renew_interval_units_convert_to_seconds(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     config_path.write_text(
