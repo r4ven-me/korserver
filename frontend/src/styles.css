@@ -373,7 +373,7 @@ h3 {
 .metric-grid {
   display: grid;
   gap: 14px;
-  grid-template-columns: repeat(4, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
 }
 
 .metric {
@@ -397,6 +397,7 @@ label span,
 .metric strong {
   font-size: 30px;
   line-height: 1;
+  overflow-wrap: anywhere;
 }
 
 .facts {
@@ -425,7 +426,7 @@ label span,
   align-items: start;
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(4, minmax(150px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
 .upstream-settings-grid {
@@ -1144,47 +1145,12 @@ tbody tr:hover {
   background: color-mix(in srgb, var(--surface-2) 42%, transparent);
 }
 
-.upstream-profiles-panel table {
-  table-layout: fixed;
-}
-
-.upstream-profiles-panel th:nth-child(1) { width: 16%; }
-.upstream-profiles-panel th:nth-child(2) { width: 22%; }
-.upstream-profiles-panel th:nth-child(3) { width: 13%; }
-.upstream-profiles-panel th:nth-child(4) { width: 13%; }
-.upstream-profiles-panel th:nth-child(5) { width: 12%; }
-.upstream-profiles-panel th:nth-child(6) { width: 24%; }
-
-.upstream-profiles-panel td {
-  overflow-wrap: anywhere;
-}
-
-.users-panel .table-wrap {
-  overflow-x: visible;
-}
-
-.users-panel table {
-  table-layout: fixed;
-}
-
 .users-panel th,
 .users-panel td {
   /* Wider horizontal padding keeps full-cell controls (the password
      input stretches to its column edge) from visually merging with the
      next column's content. */
   padding: 10px 16px;
-}
-
-.users-panel th:nth-child(1) { width: 9%; }
-.users-panel th:nth-child(2) { width: 14%; }
-.users-panel th:nth-child(3) { width: 19%; }
-.users-panel th:nth-child(4) { width: 15%; }
-.users-panel th:nth-child(5) { width: 9%; }
-.users-panel th:nth-child(6) { width: 28%; }
-.users-panel th:nth-child(7) { width: 6%; }
-
-.users-panel td {
-  min-width: 0;
 }
 
 .user-name-cell {
