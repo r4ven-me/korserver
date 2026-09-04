@@ -77,7 +77,8 @@ WORKDIR /app/frontend
 COPY frontend/package.json frontend/package-lock.json frontend/tsconfig.json frontend/vite.config.ts frontend/vitest.config.ts frontend/index.html ./
 COPY frontend/public ./public
 COPY frontend/src ./src
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --no-audit --no-fund
 
 FROM frontend-base AS frontend-test
 RUN npm audit --audit-level=moderate && npm test && npm run build
