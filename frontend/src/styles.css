@@ -22,8 +22,10 @@
   --ok-bg: #dbe7f2;
   --warning: #ebcb8b;
   --warning-bg: #fff3d5;
-  --danger: #bf616a;
-  --danger-bg: #f7dddd;
+  /* Nord's nord12 orange (#d08770), muted down a notch by blending toward
+     nord0 so danger actions read as "careful", not alarm-red. */
+  --danger: #b87b69;
+  --danger-bg: #f7e3d3;
   --danger-text: var(--danger);
   --code-bg: #2e3440;
   --code-text: #eceff4;
@@ -58,8 +60,8 @@
   --ok-bg: #2f4052;
   --warning: #ebcb8b;
   --warning-bg: #4b4029;
-  --danger: #bf616a;
-  --danger-bg: #4a3035;
+  --danger: #b87b69;
+  --danger-bg: #4a3a2c;
   /* The plain --danger tone is too close to --danger-bg on dark surfaces
      (that's why "Revoke" read as blended-together red-on-red); brighten
      just the text so the dark theme keeps enough contrast. */

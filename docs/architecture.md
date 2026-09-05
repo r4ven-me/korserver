@@ -158,13 +158,15 @@ korserver/
     mode "all host traffic via upstream" would also capture the upstream
     tunnel's own packets and loop. Caveat: split routes/domains must not
     cover the upstream server's own address, or the tunnel carrier traffic
-    itself gets marked into the tunnel. **Requires `network_mode: host`**:
-    with the default bridge network + port mapping, every mechanism named
-    above (upstream tunnels, nftables rules, the fwmark table, dnsmasq's
-    listen address) exists only inside the container's own network
-    namespace — VPN clients still work, but the host's packets never
-    traverse the container's netfilter, so the feature silently does
-    nothing for the host and `ip route show table <id>` on the host stays
+    itself gets marked into the tunnel. **Requires `network_mode: host`** — the
+    project's `compose.yaml` uses it by default precisely for this and to drop
+    an extra NAT hop for VPN traffic in general (see README's Quick Start), not
+    as an opt-in for this one feature. Under the bridge network + port mapping
+    this replaced, every mechanism named above (upstream tunnels, nftables
+    rules, the fwmark table, dnsmasq's listen address) exists only inside the
+    container's own network namespace — VPN clients still work, but the host's
+    packets never traverse the container's netfilter, so the feature silently
+    does nothing for the host and `ip route show table <id>` on the host stays
     empty.
   - In full/split the upstream openconnect runs with a minimal
     interface-only vpnc-script (`templates/vpnc-script-korserver`, installed

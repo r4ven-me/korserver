@@ -4,7 +4,7 @@ system:
   log_dir: /var/log/korserver
   generated_dir: /var/lib/korserver/generated
   secrets_dir: /var/lib/korserver/secrets
-  log_level: info
+  log_level: info # debug | info | warning | error
   project_name: korserver
   log_rotation:
     enabled: false
@@ -36,13 +36,15 @@ server:
   compression: false
   cisco_client_compat: true
   debug_level: 2
+  connect_script: null
+  disconnect_script: null
   camouflage:
     enabled: true
     secret: secretWord
     realm: Hidden service
 
 certificates:
-  mode: auto
+  mode: auto # auto | external
   ca_name: Example Internal CA
   server_cert: null
   server_key: null
@@ -70,9 +72,11 @@ auth:
     issuer: Korvus Server
     send_by_email: false
     send_by_telegram: false
+  # Experimental: the OIDC/PAM-RADIUS auth bridge hasn't been verified against
+  # a real IdP in production. See README's "OIDC / Identity" before relying on it.
   oidc:
     enabled: true
-    connector: pam
+    connector: pam # pam | radius
     pam:
       service: ocserv-oidc
       gid_min: 1000
@@ -80,7 +84,7 @@ auth:
       config_file: /etc/radiusclient/radiusclient.conf
       groupconfig: true
       nas_identifier: korserver
-      group_separator: semicolon
+      group_separator: semicolon # semicolon | comma
 
 identity:
   config_per_group_dir: /var/lib/korserver/generated/config-per-group
@@ -88,6 +92,7 @@ identity:
   default_group_config: null
   select_group_by_url: true
   default_select_group: devops
+  # Same experimental status as auth.oidc above.
   oidc_providers:
     - name: keycloak
       issuer_url: https://sso.example.com/realms/vpn
@@ -135,9 +140,12 @@ upstream:
       # as "/?secret" after host:port, same as server.camouflage.secret on
       # this server's own side. Optional -- omit for a plain upstream.
       camouflage_secret: "${SECRET:PRIVATE_MAIN_CAMOUFLAGE_SECRET}"
-      auth_type: p12
+      auth_type: p12 # password | cert | p12
       trusted_cert: true
       cert_file: /var/lib/korserver/secrets/private-main.p12
+      # Alternative to cert_file/key_file: paste the file itself, Base64-encoded,
+      # so it never has to exist on disk outside korserver's own secrets_dir:
+      # cert_file_base64: "${SECRET:PRIVATE_MAIN_P12_BASE64}"
       cert_pass: "${SECRET:PRIVATE_MAIN_P12_PASSWORD}"
       check_host: 10.11.11.1
     - name: private-backup
@@ -151,7 +159,7 @@ upstream:
       check_host: 10.12.12.1
 
 routing:
-  mode: split
+  mode: split # direct | full | split
   main_interface: auto
   fwmark: "0x0c01"
   table_id: 1201
@@ -160,6 +168,7 @@ routing:
     tunnel_dns: true
     host_traffic: false
     dnsmasq_listen: 10.10.10.1
+    dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt
     domains_file: /var/lib/korserver/domains.txt
     routes:
@@ -179,18 +188,35 @@ internal_dns:
   blocklist_urls:
     - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
     - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/multi-onlydomains.txt
+  cache_size: 150
+  log_queries: false
+  local_records:
+    - "nas.corp.local 10.11.11.5"
 
 web:
   enabled: false
   listen: 127.0.0.1
   port: 8443
   tls: true
+  tls_cert: null
+  tls_key: null
   allow_insecure_http: false
+  trusted_proxies: []
   admin_user: admin
-  admin_password: "${SECRET:KORSERVER_ADMIN_PASSWORD}"
+  admin_password: null
+  admin_password_hash: "${SECRET:KORSERVER_ADMIN_PASSWORD_HASH}"
+  static_dir: /usr/share/korserver/frontend # container-internal, rarely changed
+  terminal_enabled: false
+  terminal_idle_timeout: 900
+  terminal_max_sessions: 2
+  session_lifetime: 43200
+  session_cookie_secure: true
+  admin_totp_enabled: false
+  admin_totp_secret: null
 
 cli:
   enabled: true
 
 advanced:
-  raw_ocserv_options: []
+  raw_ocserv_options:
+    auth-timeout: 240

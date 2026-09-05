@@ -13,19 +13,10 @@ services:
     cap_add:
       - NET_ADMIN
       - NET_RAW
+    network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
-    # With the default bridge network everything korserver manages -- the
-    # upstream tunnels, nftables rules, the fwmark policy-routing table and
-    # the dnsmasq listen address -- lives inside the container's own network
-    # namespace. VPN clients work fine through the mapped ports below, but
-    # the HOST cannot take part in split routing (routing.split.host_traffic)
-    # and cannot use dnsmasq as its resolver. For host participation replace
-    # the `ports:` section with:
-    #   network_mode: host
-    ports:
-      - "443:443/tcp"
-      - "443:443/udp"
+      - /dev/vhost-net:/dev/vhost-net
     volumes:
       - ./config:/etc/korserver
       - ./data:/var/lib/korserver

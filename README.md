@@ -65,6 +65,23 @@ cp .env.example .env
 docker compose up -d
 ```
 
+`compose.yaml` runs with `network_mode: host` - this is the target, recommended deployment
+scheme, not just a performance tweak for special cases. The container uses the host's
+network interfaces directly instead of Docker's bridge/NAT, which removes an extra
+`docker-proxy` hop for VPN client traffic and lets the host itself participate in split
+routing (`routing.split.host_traffic`) and use the built-in `dnsmasq` as its own
+resolver - neither is possible under the default bridge network, since host packets
+never traverse the container's netfilter there. Two things worth knowing: `nft` rules
+are applied directly to the host's netfilter in this mode (not an isolated namespace),
+so the image's `nftables` userspace version (built on Debian) should match the host
+kernel - a Debian host avoids the issue entirely; and `korserver` only ever creates its
+own project-owned tables (prefixed with `routing.nft_prefix`, no global `flush
+ruleset`), so it doesn't touch unrelated host rules. The `devices:` list also maps
+`/dev/vhost-net` - an optional accelerated TUN path that `openconnect` (including the
+Upstream/middle-server outbound tunnel) can use if the host supports the `vhost_net`
+kernel module; if it's missing, `openconnect` silently falls back to a plain `tun`, only
+logging a harmless `Failed to open /dev/vhost-net`.
+
 Check the status:
 
 ```bash
@@ -86,9 +103,10 @@ Check listening ports inside the container:
 docker compose exec korserver sh -lc 'ss -lntup | grep 443'
 ```
 
-The default `compose.yaml` only publishes the VPN ports. The Web API/GUI are disabled
-and port `8443` isn't published, so `curl 127.0.0.1:8443` isn't a valid check of the VPN
-server under normal operation. To check the Web component, use the separate override
+Under `network_mode: host` there's no Docker port-publishing step at all - whatever the
+container binds to, the host has directly. The Web API/GUI are simply disabled
+(`web.enabled: false`) by default, so `curl 127.0.0.1:8443` isn't a valid check of the
+VPN server under normal operation. To check the Web component, use the separate override
 described in "Web API and GUI".
 
 Stop:
@@ -252,6 +270,274 @@ Diff between the current generated files and a fresh render:
 ```bash
 docker compose exec korserver korctl config diff
 ```
+
+### Exhaustive Configuration Reference
+
+Every top-level field `AppConfig` knows about, in one file - also available as
+`examples/config.full.yaml`. Useful as a copy-paste base, or just to see what exists
+beyond the minimal example above. Values are illustrative, not defaults; anything you
+omit falls back to the real default in `backend/korserver/config/models.py`. It was
+validated as-is with `korctl config validate` and `korctl config render --dry-run`
+(after exporting the referenced `${SECRET:...}` names).
+
+```yaml
+system:
+  timezone: Europe/Moscow
+  data_dir: /var/lib/korserver
+  log_dir: /var/log/korserver
+  generated_dir: /var/lib/korserver/generated
+  secrets_dir: /var/lib/korserver/secrets
+  log_level: info # debug | info | warning | error
+  project_name: korserver
+  log_rotation:
+    enabled: false
+    max_size_mb: 50
+    max_age: 0
+    max_age_unit: days # hours | days | weeks | months
+    keep_files: 5
+
+server:
+  enabled: true
+  listen: 0.0.0.0
+  port: 443
+  udp_enabled: true
+  device: vpns
+  cn: vpn.example.com
+  realm: Korvus Server
+  ipv4_network: 10.10.10.0/24
+  dns:
+    - 10.10.10.1
+    - 1.1.1.1
+  search_domains:
+    - corp.example.com
+  routes:
+    - 192.168.25.0/24
+  no_routes: []
+  max_clients: 128
+  max_same_clients: 2
+  keepalive: 32400
+  compression: false
+  cisco_client_compat: true
+  debug_level: 2
+  connect_script: null
+  disconnect_script: null
+  camouflage:
+    enabled: true
+    secret: secretWord
+    realm: Hidden service
+
+certificates:
+  mode: auto # auto | external
+  ca_name: Example Internal CA
+  server_cert: null
+  server_key: null
+  ca_cert: null
+  letsencrypt:
+    enabled: false
+    email: admin@example.com
+    domains:
+      - vpn.example.com
+    renew_reload: true
+    auto_renew_enabled: true
+    auto_renew_interval: 7
+    auto_renew_interval_unit: days # hours | days | weeks | months
+    http01_address: null
+    http01_port: 80
+
+auth:
+  password:
+    enabled: true
+  certificate:
+    enabled: true
+  otp:
+    enabled: true
+    ocserv_oath_auth: false
+    issuer: Korvus Server
+    send_by_email: false
+    send_by_telegram: false
+  # Experimental: the OIDC/PAM-RADIUS auth bridge hasn't been verified against
+  # a real IdP in production. See "OIDC / Identity" before relying on it.
+  oidc:
+    enabled: true
+    connector: pam # pam | radius
+    pam:
+      service: ocserv-oidc
+      gid_min: 1000
+    radius:
+      config_file: /etc/radiusclient/radiusclient.conf
+      groupconfig: true
+      nas_identifier: korserver
+      group_separator: semicolon # semicolon | comma
+
+identity:
+  config_per_group_dir: /var/lib/korserver/generated/config-per-group
+  config_per_user_dir: null
+  default_group_config: null
+  select_group_by_url: true
+  default_select_group: devops
+  # Same experimental status as auth.oidc above.
+  oidc_providers:
+    - name: keycloak
+      issuer_url: https://sso.example.com/realms/vpn
+      client_id: korserver-vpn
+      client_secret: "${SECRET:OIDC_CLIENT_SECRET}"
+      scopes:
+        - openid
+        - profile
+        - email
+      username_claim: preferred_username
+      groups_claim: groups
+      allowed_groups:
+        - devops
+        - finance
+  group_policies:
+    - name: devops
+      display_name: DevOps
+      routes:
+        - 10.20.0.0/16
+      dns:
+        - 10.10.10.1
+      split_dns:
+        - corp.example.com
+      max_same_clients: 4
+    - name: finance
+      display_name: Finance
+      routes:
+        - 10.30.0.0/16
+      no_routes:
+        - 10.20.99.0/24
+      session_timeout: 28800
+
+upstream:
+  enabled: true
+  interface: oc-middle0
+  check_interval: 5
+  check_threshold: 3
+  check_settle_seconds: 15
+  failover: true
+  profiles:
+    - name: private-main
+      server: private.example.com
+      port: "443"
+      # Only if the upstream ocserv itself has camouflage enabled; appended
+      # as "/?secret" after host:port, same as server.camouflage.secret on
+      # this server's own side. Optional -- omit for a plain upstream.
+      camouflage_secret: "${SECRET:PRIVATE_MAIN_CAMOUFLAGE_SECRET}"
+      auth_type: p12 # password | cert | p12
+      trusted_cert: true
+      cert_file: /var/lib/korserver/secrets/private-main.p12
+      # Alternative to cert_file/key_file: paste the file itself, Base64-encoded,
+      # so it never has to exist on disk outside korserver's own secrets_dir:
+      # cert_file_base64: "${SECRET:PRIVATE_MAIN_P12_BASE64}"
+      cert_pass: "${SECRET:PRIVATE_MAIN_P12_PASSWORD}"
+      check_host: 10.11.11.1
+    - name: private-backup
+      server: backup.example.com
+      port: "443"
+      auth_type: password
+      username: middle-user
+      password: "${SECRET:PRIVATE_BACKUP_PASSWORD}"
+      trusted_cert: false
+      server_cert_pin: ""
+      check_host: 10.12.12.1
+
+routing:
+  mode: split # direct | full | split
+  main_interface: auto
+  fwmark: "0x0c01"
+  table_id: 1201
+  nft_prefix: korserver
+  split:
+    tunnel_dns: true
+    host_traffic: false
+    dnsmasq_listen: 10.10.10.1
+    dnsmasq_port: 53
+    routes_file: /var/lib/korserver/routes.txt
+    domains_file: /var/lib/korserver/domains.txt
+    routes:
+      - 192.168.25.0/24
+      - 10.20.0.0/16
+    domains:
+      - example.com
+      - corp.example.com
+
+internal_dns:
+  enabled: true
+  blocklist_domains:
+    - ads.example.com
+    - tracker.example.net
+  blocklist_files:
+    - /var/lib/korserver/blocklist.txt
+  blocklist_urls:
+    - https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts
+    - https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/multi-onlydomains.txt
+  cache_size: 150
+  log_queries: false
+  local_records:
+    - "nas.corp.local 10.11.11.5"
+
+web:
+  enabled: false
+  listen: 127.0.0.1
+  port: 8443
+  tls: true
+  tls_cert: null
+  tls_key: null
+  allow_insecure_http: false
+  trusted_proxies: []
+  admin_user: admin
+  admin_password: null
+  admin_password_hash: "${SECRET:KORSERVER_ADMIN_PASSWORD_HASH}"
+  static_dir: /usr/share/korserver/frontend # container-internal, rarely changed
+  terminal_enabled: false
+  terminal_idle_timeout: 900
+  terminal_max_sessions: 2
+  session_lifetime: 43200
+  session_cookie_secure: true
+  admin_totp_enabled: false
+  admin_totp_secret: null
+
+cli:
+  enabled: true
+
+advanced:
+  raw_ocserv_options:
+    auth-timeout: 240
+```
+
+Section by section, beyond what's already covered in depth elsewhere in this README:
+
+- `system` - runtime paths and log level/rotation; `project_name` feeds the ocserv
+  `device` name prefix and the default nftables table prefix.
+- `server` - `connect_script`/`disconnect_script` are optional host-side hooks ocserv
+  runs on client connect/disconnect (absolute paths inside the container); `camouflage`
+  makes `ocserv` masquerade as a plain web service until the connecting client's URL
+  includes `?<camouflage.secret>`, defeating simple active probing.
+- `certificates` - see "Certificates and PKCS#12" for `mode`/Let's Encrypt in depth.
+- `auth` - password/certificate/OTP are covered in "Users and Passwords"/"OTP"; `oidc`
+  is the experimental PAM/RADIUS bridge, covered next.
+- `identity` - OIDC providers and group policies, covered in "OIDC / Identity"
+  (**experimental, not verified against a real IdP in production** - see that section).
+- `upstream` - middle-server outbound profiles, covered in "Middle-Server Mode";
+  `cert_file_base64`/`key_file_base64` let a profile's client certificate/key travel
+  as a `.env` secret instead of a mounted file, the same pattern Korvus Client uses.
+- `routing` - server-side policy routing/kill-switch, covered in "Routing,
+  Firewall/NAT, Split Routes and Domains".
+- `internal_dns` - the built-in blocking resolver; unlisted here beyond the minimal
+  example, but every field is self-explanatory from its name (domains/files/URLs to
+  block, DNS cache size, query logging, local A-record overrides).
+- `web` - the panel, covered in depth in "Web API and GUI"; `tls_cert`/`tls_key` (both
+  required together, or both left `null` for the auto-generated certificate) let you
+  bring your own certificate for the panel independent of the VPN's own certificates;
+  `admin_totp_*` is managed entirely through the panel's own two-factor setup flow, not
+  meant to be hand-written - `admin_totp_secret` only exists here because it has to live
+  somewhere once you enable it.
+- `cli` - `enabled: false` would disable the CLI, which contradicts the project's
+  "CLI is always the primary interface" principle; there's essentially no good reason to
+  set this.
+- `advanced.raw_ocserv_options` - an escape hatch straight into `ocserv.conf`: a mapping
+  renders as `key = value` lines (`null` value for a bare flag), a list renders each
+  entry verbatim as-is, for any directive the typed config doesn't model yet.
 
 ## Env Overrides and Secrets
 
@@ -517,6 +803,12 @@ docker compose exec korserver korctl user otp disable alice
 OTP secrets are stored in `data/secrets/users.oath`.
 
 ## OIDC / Identity
+
+**Experimental.** This feature is implemented and covered by unit tests, but hasn't been
+verified end-to-end against a real IdP in production, and doesn't have the same
+real-world mileage as the rest of the project. Treat it as a starting point to adapt and
+test thoroughly against your own Keycloak/Authentik/RADIUS setup before relying on it,
+not as a drop-in.
 
 `ocserv` has no native browser-redirect OIDC flow for VPN clients. Korvus Server adds
 an identity model for Keycloak/Authentik-like IdPs, generates ocserv `config-per-group`
@@ -846,9 +1138,9 @@ web:
   enabled: false
 ```
 
-The default `compose.yaml` doesn't publish port `8443`. This is intentional: the CLI
-stays the primary interface, and Web shouldn't accidentally become reachable from
-outside.
+Web stays off by default. This is intentional: the CLI stays the primary interface, and
+Web shouldn't accidentally become reachable without a deliberate, explicit config
+change.
 
 For a local Web API/GUI check, use the override:
 
@@ -857,20 +1149,12 @@ docker compose -f compose.yaml -f compose.web.yaml up --build -d
 curl -kfsS https://127.0.0.1:8443/healthz
 ```
 
-`compose.web.yaml` enables Web, makes Uvicorn listen on `0.0.0.0` inside the container
-over HTTPS, and only publishes the port on the host's loopback: `127.0.0.1:8443`. The
-`korserver` auto-certificate is used by default; the browser will warn about a private
-CA until that CA is trusted or a public certificate is configured.
-
-If `curl 127.0.0.1:8443` connects and then gets `Recv failure: Connection reset by
-peer`, the port is almost certainly published by Docker, but the API inside the
-container listens on `127.0.0.1:8443`. For access from the host, set:
-
-```env
-KORSERVER_WEB__ENABLED=true
-KORSERVER_WEB__LISTEN=0.0.0.0
-KORSERVER_WEB__TLS=true
-```
+`compose.web.yaml` enables Web and makes Uvicorn listen on `127.0.0.1` inside the
+container over HTTPS. Since the base `compose.yaml` runs with `network_mode: host`,
+that's the real host loopback directly - no Docker port publishing is needed or used,
+and nothing about Web is reachable from outside the host. The `korserver`
+auto-certificate is used by default; the browser will warn about a private CA until
+that CA is trusted or a public certificate is configured.
 
 If you enable `web.enabled: true`, supervisor starts the Uvicorn API and serves the
 static frontend from `/usr/share/korserver/frontend`, if a frontend build is present in
@@ -932,9 +1216,12 @@ web:
 The proxy should connect to this loopback/private endpoint and only publish HTTPS.
 Don't expose the HTTP Web API directly.
 
-If the proxy is on a Docker network, specify that network's CIDR, e.g.
-`172.18.0.0/16`. Uvicorn will then only accept `X-Forwarded-For` and
-`X-Forwarded-Proto` from the trusted proxy. Don't use a wide range unless you need to.
+Since `compose.yaml` runs with `network_mode: host`, `korserver` has no bridge-network
+IP of its own for a separate proxy container to reach by a Docker network CIDR - the
+proxy needs to reach it via the host's own `127.0.0.1`, which means running the proxy
+with `network_mode: host` too (or natively on the host, outside Docker entirely).
+Uvicorn will then only accept `X-Forwarded-For` and `X-Forwarded-Proto` from the trusted
+proxy source. Don't widen `trusted_proxies` beyond what you actually need.
 
 Keep `session_cookie_secure` enabled behind an HTTPS reverse proxy too. Only disable it
 for isolated local HTTP development.
@@ -945,13 +1232,10 @@ Compose override for this setup:
 docker compose -f compose.yaml -f compose.proxy.yaml up -d
 ```
 
-In the Docker override, the API listens on `0.0.0.0` inside the container, but the port
-is only published on `127.0.0.1` on the host. If the reverse proxy sends
-`X-Forwarded-*`, set the trusted source via a variable, e.g.:
-
-```env
-KORSERVER_WEB__TRUSTED_PROXIES='["172.18.0.1"]'
-```
+In the Docker override, the API listens on `127.0.0.1` inside the container - the real
+host loopback, since networking is shared - which is also the address a host-networked
+reverse proxy will present as its own source, matching the default
+`trusted_proxies: [127.0.0.1]` above.
 
 The interactive root terminal is disabled by default. To enable it in a controlled way:
 

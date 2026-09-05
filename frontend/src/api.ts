@@ -635,6 +635,12 @@ export function deleteGroupConfig(token: string, name: string): Promise<CommandR
   });
 }
 
+export function deleteGroup(token: string, name: string): Promise<CommandResult> {
+  return requestJson<CommandResult>(`/api/groups/${encodeURIComponent(name)}`, token, {
+    method: "DELETE"
+  });
+}
+
 export function fetchOtpRecords(token: string): Promise<OtpRecord[]> {
   return requestJson<OtpRecord[]>("/api/users/otp", token);
 }

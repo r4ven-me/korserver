@@ -6,6 +6,7 @@ import {
   Clock,
   Copy,
   Download,
+  Eraser,
   Eye,
   FileDiff,
   FileSliders,
@@ -62,6 +63,7 @@ import {
   createP12,
   createUser,
   deleteGroupPolicy,
+  deleteGroup,
   deleteGroupConfig,
   deleteOidcProvider,
   deleteUpstreamProfile,
@@ -2040,6 +2042,30 @@ function App() {
                 setState((current) => ({ ...current, groups }));
               }
             }}
+            onDeleteGroup={async (name) => {
+              if (
+                !confirmAction(
+                  `Delete group ${name}? This removes its config file, its group policy ` +
+                    "and clears it from every member's group list."
+                )
+              ) {
+                return;
+              }
+              const result = await runAction(
+                `group-delete-${name}`,
+                `Group ${name} deleted`,
+                (token) => deleteGroup(token, name),
+                { reload: false }
+              );
+              recordCommand("groups", result);
+              if (result !== null && authToken) {
+                const [groups, users] = await Promise.all([
+                  fetchGroups(authToken),
+                  fetchUsers(authToken)
+                ]);
+                setState((current) => ({ ...current, groups, users }));
+              }
+            }}
             onOpenMembers={(name) => {
               setGroupMembersModal({
                 name,
@@ -3717,6 +3743,7 @@ function GroupsView({
   onCreate,
   onOpenConfig,
   onDeleteConfig,
+  onDeleteGroup,
   onOpenMembers
 }: {
   groups: GroupConfigRecord[];
@@ -3729,6 +3756,7 @@ function GroupsView({
   onCreate: () => void;
   onOpenConfig: (name: string) => void;
   onDeleteConfig: (name: string) => void;
+  onDeleteGroup: (name: string) => void;
   onOpenMembers: (name: string) => void;
 }) {
   return (
@@ -3778,11 +3806,17 @@ function GroupsView({
                   />
                   <IconButton
                     label="Clear group config"
-                    icon={Trash2}
-                    danger
+                    icon={Eraser}
                     disabled={!group.config_exists}
                     busy={busy === `group-config-delete-${group.name}`}
                     onClick={() => onDeleteConfig(group.name)}
+                  />
+                  <IconButton
+                    label="Delete group"
+                    icon={Trash2}
+                    danger
+                    busy={busy === `group-delete-${group.name}`}
+                    onClick={() => onDeleteGroup(group.name)}
                   />
                 </div>
               </td>
