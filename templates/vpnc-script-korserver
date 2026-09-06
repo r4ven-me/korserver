@@ -1,13 +1,11 @@
 #!/bin/sh
 # Installed by korserver (UpstreamService). openconnect calls this script on
-# upstream tunnel events when routing.mode is full/split. In those modes ALL
-# egress via the tunnel is controlled by korserver's own fwmark policy
-# routing and nftables rules, so whatever the upstream server pushes (default
+# every upstream tunnel event. ALL egress via the tunnel is controlled by
+# korserver's own fwmark policy routing and nftables rules (routing.mode is
+# always full or split), so whatever the upstream server pushes (default
 # route, split routes, DNS) must NOT be applied to this namespace's routing
 # table or resolv.conf -- with network_mode: host that would hijack the host
 # itself. This script only configures the tunnel interface and nothing else.
-# (routing.mode=direct keeps the distribution vpnc-script and its full
-# route/DNS handling.)
 
 case "${reason:-}" in
   connect | reconnect)

@@ -159,14 +159,15 @@ upstream:
       check_host: 10.12.12.1
 
 routing:
-  mode: split # direct | full | split
+  mode: split # full | split
+  host_traffic: false
+  host_mode: full # full | split -- independent of the client-facing mode above
   main_interface: auto
   fwmark: "0x0c01"
   table_id: 1201
   nft_prefix: korserver
   split:
     tunnel_dns: true
-    host_traffic: false
     dnsmasq_listen: 10.10.10.1
     dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt

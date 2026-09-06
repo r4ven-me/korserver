@@ -103,15 +103,17 @@ upstream:
 
 routing:
   mode: full
+  # Route the server host's own traffic through Upstream too, independent
+  # of the client-facing mode above (full: all host traffic; split: only
+  # the routes/domains below).
+  host_traffic: false
+  host_mode: full
   main_interface: auto
   fwmark: "0x0c01"
   table_id: 1201
   nft_prefix: korserver
   split:
     tunnel_dns: false
-    # Route the server host's own traffic through the split rules too
-    # (host follows the same routes/domain masks as VPN clients).
-    host_traffic: false
     dnsmasq_listen: 10.10.10.1
     dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt
@@ -151,6 +153,8 @@ web:
   terminal_max_sessions: 2
   session_lifetime: 43200
   session_cookie_secure: true
+  admin_totp_enabled: false
+  admin_totp_secret: null
 
 cli:
   enabled: true

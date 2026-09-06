@@ -401,6 +401,8 @@ const emptyUpstreamProfileDraft: UpstreamProfileDraft = {
   server_cert_pin: "",
   check_host: "",
   camouflage_secret: "",
+  routes: "",
+  domains: "",
   enable: true,
   enabled: true
 };
@@ -425,6 +427,8 @@ function upstreamProfileToDraft(profile: UpstreamProfile): UpstreamProfileDraft 
     // write-only, never sent back by the API (same as password/cert_pass);
     // leaving it blank on save keeps whatever secret is already stored.
     camouflage_secret: "",
+    routes: listText(profile.routes ?? []),
+    domains: listText(profile.domains ?? []),
     enable: true,
     enabled: profile.enabled
   };
@@ -503,6 +507,7 @@ function App() {
     mode: "full",
     tunnelDns: false,
     hostTraffic: false,
+    hostMode: "full",
     dnsmasqListen: "10.10.10.1",
     dnsmasqPort: 53,
     mainInterface: "auto",
@@ -587,6 +592,7 @@ function App() {
   const [upstreamInterface, setUpstreamInterface] = useState("oc-middle0");
   const [upstreamCheckInterval, setUpstreamCheckInterval] = useState(5);
   const [upstreamCheckThreshold, setUpstreamCheckThreshold] = useState(3);
+  const [upstreamCheckSettleSeconds, setUpstreamCheckSettleSeconds] = useState(15);
   const [upstreamFailover, setUpstreamFailover] = useState(false);
   const [upstreamCheckHost, setUpstreamCheckHost] = useState("");
   const [logRequest, setLogRequest] = useState({ name: "supervisord.log", lines: 100 });
@@ -800,6 +806,7 @@ function App() {
           const upstreamConfig = readRecord(config.value.upstream);
           setUpstreamCheckInterval(readNumber(upstreamConfig.check_interval, 5));
           setUpstreamCheckThreshold(readNumber(upstreamConfig.check_threshold, 3));
+          setUpstreamCheckSettleSeconds(readNumber(upstreamConfig.check_settle_seconds, 15));
           setUpstreamFailover(readBoolean(upstreamConfig.failover, false));
           setServerSettingsDraft(readServerSettingsDraft(config.value));
           setAuthMethodsDraft(readAuthMethodsDraft(config.value));
@@ -1234,6 +1241,7 @@ function App() {
         mode: routingDraft.mode,
         tunnel_dns: routingDraft.tunnelDns,
         host_traffic: routingDraft.hostTraffic,
+        host_mode: routingDraft.hostMode,
         dnsmasq_listen: routingDraft.dnsmasqListen,
         dnsmasq_port: routingDraft.dnsmasqPort,
         main_interface: routingDraft.mainInterface,
@@ -1466,6 +1474,7 @@ function App() {
           active_profile: state.upstream?.active_profile ?? state.upstreamProfiles[0]?.name ?? null,
           check_interval: upstreamCheckInterval,
           check_threshold: upstreamCheckThreshold,
+          check_settle_seconds: upstreamCheckSettleSeconds,
           failover: upstreamFailover
         })
     );
@@ -1990,9 +1999,23 @@ function App() {
                 { reload: false }
               );
             }}
-            onOpenGroups={(username) => {
-              const user = state.users.find((item) => item.username === username);
-              setUserGroupsModal({ username, groups: user?.groups ?? [] });
+            onOpenGroups={async (username) => {
+              // Fetch fresh for the same reason as GroupsView's onOpenMembers
+              // below: state.users only updates after actions taken through
+              // this panel, so a stale tab or an out-of-band change (CLI,
+              // another admin session) would otherwise show wrong here.
+              await runAction(
+                `user-groups-load-${username}`,
+                `Loaded groups for ${username}`,
+                async (token) => {
+                  const users = await fetchUsers(token);
+                  setState((current) => ({ ...current, users }));
+                  const user = users.find((item) => item.username === username);
+                  setUserGroupsModal({ username, groups: user?.groups ?? [] });
+                  return { status: "ok" };
+                },
+                { reload: false }
+              );
             }}
           />
         )}
@@ -2066,13 +2089,28 @@ function App() {
                 setState((current) => ({ ...current, groups, users }));
               }
             }}
-            onOpenMembers={(name) => {
-              setGroupMembersModal({
-                name,
-                users: state.users
-                  .filter((user) => (user.groups ?? []).includes(name))
-                  .map((user) => user.username)
-              });
+            onOpenMembers={async (name) => {
+              // Fetch fresh rather than trusting the in-memory state.users
+              // snapshot: it only ever updates after an action taken through
+              // this panel, so membership changed via the CLI, another admin
+              // session, or just a stale tab would otherwise show here as
+              // wrong until some unrelated reload happened to refresh it.
+              await runAction(
+                `group-members-load-${name}`,
+                `Loaded members for ${name}`,
+                async (token) => {
+                  const users = await fetchUsers(token);
+                  setState((current) => ({ ...current, users }));
+                  setGroupMembersModal({
+                    name,
+                    users: users
+                      .filter((user) => (user.groups ?? []).includes(name))
+                      .map((user) => user.username)
+                  });
+                  return { status: "ok" };
+                },
+                { reload: false }
+              );
             }}
           />
         )}
@@ -2291,6 +2329,7 @@ function App() {
             upstreamInterface={upstreamInterface}
             checkInterval={upstreamCheckInterval}
             checkThreshold={upstreamCheckThreshold}
+            checkSettleSeconds={upstreamCheckSettleSeconds}
             failover={upstreamFailover}
             checkHost={upstreamCheckHost}
             hasActiveProfile={Boolean(state.upstream?.active_profile)}
@@ -2298,6 +2337,7 @@ function App() {
             onInterfaceChange={setUpstreamInterface}
             onCheckIntervalChange={setUpstreamCheckInterval}
             onCheckThresholdChange={setUpstreamCheckThreshold}
+            onCheckSettleSecondsChange={setUpstreamCheckSettleSeconds}
             onFailoverChange={setUpstreamFailover}
             onCheckHostChange={setUpstreamCheckHost}
             onClose={() => setUpstreamSettingsModalOpen(false)}
@@ -3054,6 +3094,7 @@ function readRoutingDraft(config: Record<string, unknown>): {
   mode: string;
   tunnelDns: boolean;
   hostTraffic: boolean;
+  hostMode: string;
   dnsmasqListen: string;
   dnsmasqPort: number;
   mainInterface: string;
@@ -3066,7 +3107,8 @@ function readRoutingDraft(config: Record<string, unknown>): {
   return {
     mode: readString(routing.mode, "full"),
     tunnelDns: readBoolean(split.tunnel_dns, false),
-    hostTraffic: readBoolean(split.host_traffic, false),
+    hostTraffic: readBoolean(routing.host_traffic, false),
+    hostMode: readString(routing.host_mode, "full"),
     dnsmasqListen: readString(split.dnsmasq_listen, "10.10.10.1"),
     dnsmasqPort: readNumber(split.dnsmasq_port, 53),
     mainInterface: readString(routing.main_interface, "auto"),
@@ -3380,7 +3422,7 @@ function UsersView({
                       <IconButton
                         label="Groups"
                         icon={Users}
-                        busy={busy === `user-groups-${user.username}`}
+                        busy={busy === `user-groups-load-${user.username}`}
                         onClick={() => onOpenGroups(user.username)}
                       />
                     </div>
@@ -3795,7 +3837,7 @@ function GroupsView({
                   <IconButton
                     label="Members"
                     icon={Users}
-                    busy={busy === `group-members-${group.name}`}
+                    busy={busy === `group-members-load-${group.name}`}
                     onClick={() => onOpenMembers(group.name)}
                   />
                   <IconButton
@@ -4238,6 +4280,7 @@ function RoutingView({
     mode: string;
     tunnelDns: boolean;
     hostTraffic: boolean;
+    hostMode: string;
     dnsmasqListen: string;
     dnsmasqPort: number;
     mainInterface: string;
@@ -4252,6 +4295,7 @@ function RoutingView({
     mode: string;
     tunnelDns: boolean;
     hostTraffic: boolean;
+    hostMode: string;
     dnsmasqListen: string;
     dnsmasqPort: number;
     mainInterface: string;
@@ -4267,10 +4311,6 @@ function RoutingView({
   onCleanupNft: () => void;
   onShowNft: () => void;
 }) {
-  // "Split routing" as a whole (interface/fwmark/table id/nftables prefix
-  // only mean anything once the server actually manages NAT/routing for
-  // the VPN subnet, i.e. any mode other than "direct").
-  const routingActive = routingDraft.mode !== "direct";
   const splitEnabled = routingDraft.mode === "split";
   // Domains only work if this server's own dnsmasq is the one resolving
   // them (so it can tag the result into the split set) -- without that,
@@ -4283,12 +4323,13 @@ function RoutingView({
           <h2>Server-side routing</h2>
         </div>
         <p className="muted-line">
-          Decides how the server itself sends VPN client traffic onward, once it leaves
-          ocserv: Off leaves it to the host's normal routing. Full sends all of it through
-          the active Upstream connection above, and blocks it while Upstream is down
-          instead of leaking it out the host's own connection. Split forces only the
-          routes/domains below through Upstream (same kill-switch); everything else
-          still uses the host normally.
+          Decides how the server itself sends VPN client traffic onward once it leaves
+          ocserv, once Upstream above is enabled: Full sends all of it through the active
+          Upstream connection, and blocks it while Upstream is down instead of leaking it
+          out the host's own connection. Split forces only the routes/domains below
+          through Upstream (same kill-switch); everything else still uses the host
+          normally. Without an enabled Upstream connection, clients always just use the
+          host's normal routing regardless of this setting.
         </p>
         <div className="settings-grid">
           <label>
@@ -4299,7 +4340,6 @@ function RoutingView({
                 onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
               }
             >
-              <option value="direct">Off (host decides)</option>
               <option value="full">Full (all traffic via Upstream)</option>
               <option value="split">Split (only listed traffic via Upstream)</option>
             </select>
@@ -4320,11 +4360,10 @@ function RoutingView({
           </label>
           <label
             className="switch routing-split-dns"
-            title="Also route this server host's own traffic by the split routes/domains (marked in the nftables output hook), so the host reaches the same networks as VPN clients without connecting to its own ocserv. Point the host's resolver at the dnsmasq listen address for domain masks to apply. Requires the container to run with network_mode: host — in the default bridge network the rules only exist inside the container's own namespace."
+            title="Also route this server host's own traffic through Upstream, independent of the client Mode above. Full marks all host-originated traffic; Split marks only the routes/domains below (marked in the nftables output hook). Point the host's resolver at the dnsmasq listen address for domain masks to apply in Split. Requires the container to run with network_mode: host — in the default bridge network the rules only exist inside the container's own namespace."
           >
             <input
               checked={routingDraft.hostTraffic}
-              disabled={!splitEnabled}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, hostTraffic: event.target.checked })
               }
@@ -4332,10 +4371,28 @@ function RoutingView({
             />
             <span>Host traffic</span>
           </label>
+          <label
+            title={
+              routingDraft.hostMode === "full"
+                ? "Caution: matches ALL host-originated traffic, which can also capture the outbound Upstream connection itself and cause a routing loop unless your network already routes that address another way. Prefer Split with a curated route list when precision matters."
+                : undefined
+            }
+          >
+            <span>Host mode</span>
+            <select
+              disabled={!routingDraft.hostTraffic}
+              value={routingDraft.hostMode}
+              onChange={(event) =>
+                onRoutingDraftChange({ ...routingDraft, hostMode: event.target.value })
+              }
+            >
+              <option value="full">Full (all host traffic)</option>
+              <option value="split">Split (only listed traffic)</option>
+            </select>
+          </label>
           <label>
             <span>Main interface</span>
             <input
-              disabled={!routingActive}
               value={routingDraft.mainInterface}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, mainInterface: event.target.value })
@@ -4346,7 +4403,6 @@ function RoutingView({
           <label>
             <span>fwmark</span>
             <input
-              disabled={!routingActive}
               value={routingDraft.fwmark}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, fwmark: event.target.value })
@@ -4356,7 +4412,6 @@ function RoutingView({
           <label>
             <span>Routing table id</span>
             <input
-              disabled={!routingActive}
               type="number"
               value={routingDraft.tableId}
               onChange={(event) =>
@@ -4370,7 +4425,6 @@ function RoutingView({
           <label>
             <span>nftables prefix</span>
             <input
-              disabled={!routingActive}
               value={routingDraft.nftPrefix}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, nftPrefix: event.target.value })
@@ -4476,6 +4530,7 @@ function InternalDnsView({
     mode: string;
     tunnelDns: boolean;
     hostTraffic: boolean;
+    hostMode: string;
     dnsmasqListen: string;
     dnsmasqPort: number;
     mainInterface: string;
@@ -4499,6 +4554,7 @@ function InternalDnsView({
     mode: string;
     tunnelDns: boolean;
     hostTraffic: boolean;
+    hostMode: string;
     dnsmasqListen: string;
     dnsmasqPort: number;
     mainInterface: string;
@@ -5415,6 +5471,7 @@ function UpstreamSettingsDialog({
   upstreamInterface,
   checkInterval,
   checkThreshold,
+  checkSettleSeconds,
   failover,
   checkHost,
   hasActiveProfile,
@@ -5422,6 +5479,7 @@ function UpstreamSettingsDialog({
   onInterfaceChange,
   onCheckIntervalChange,
   onCheckThresholdChange,
+  onCheckSettleSecondsChange,
   onFailoverChange,
   onCheckHostChange,
   onClose,
@@ -5430,6 +5488,7 @@ function UpstreamSettingsDialog({
   upstreamInterface: string;
   checkInterval: number;
   checkThreshold: number;
+  checkSettleSeconds: number;
   failover: boolean;
   checkHost: string;
   hasActiveProfile: boolean;
@@ -5437,6 +5496,7 @@ function UpstreamSettingsDialog({
   onInterfaceChange: (value: string) => void;
   onCheckIntervalChange: (value: number) => void;
   onCheckThresholdChange: (value: number) => void;
+  onCheckSettleSecondsChange: (value: number) => void;
   onFailoverChange: (value: boolean) => void;
   onCheckHostChange: (value: string) => void;
   onClose: () => void;
@@ -5481,7 +5541,17 @@ function UpstreamSettingsDialog({
               }
             />
           </label>
-          <label className="switch" title="Fail over to the direct route when upstream checks fail">
+          <label title="Grace window after a successful reconnect during which health-check failures aren't counted yet, so a still-settling tunnel can't immediately trigger another reconnect">
+            <span>Check settle (s)</span>
+            <input
+              type="number"
+              value={checkSettleSeconds}
+              onChange={(event) =>
+                onCheckSettleSecondsChange(Math.max(0, Number(event.target.value) || 0))
+              }
+            />
+          </label>
+          <label className="switch" title="When health checks fail, try the other configured profiles in turn (after reconnecting the active one first)">
             <input
               checked={failover}
               onChange={(event) => onFailoverChange(event.target.checked)}
@@ -5702,6 +5772,22 @@ function UpstreamProfileDialog({
                 onDraftChange({ ...draft, camouflage_secret: event.target.value })
               }
               placeholder={isEdit ? "leave blank to keep existing" : "optional"}
+            />
+          </label>
+          <label title="Route these specific CIDRs through this profile specifically, regardless of which profile is active/default. Leave blank to only carry traffic when this profile is active.">
+            <span>Target routes</span>
+            <textarea
+              value={draft.routes}
+              onChange={(event) => onDraftChange({ ...draft, routes: event.target.value })}
+              rows={3}
+            />
+          </label>
+          <label title="Route these specific domains through this profile specifically, regardless of which profile is active/default. Leave blank to only carry traffic when this profile is active.">
+            <span>Target domains</span>
+            <textarea
+              value={draft.domains}
+              onChange={(event) => onDraftChange({ ...draft, domains: event.target.value })}
+              rows={3}
             />
           </label>
           <label className="switch" title="Skip upstream certificate verification">

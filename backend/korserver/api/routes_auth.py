@@ -31,13 +31,35 @@ def login(request: Request, response: Response, payload: LoginRequest) -> dict[s
     if config.web.admin_totp_enabled:
         secret = config.web.admin_totp_secret
         if not payload.totp_code:
+            # Not a guess attempt -- the frontend's normal flow calls
+            # /login without a code first, gets this response, then prompts
+            # for one. Counting it as a failure would drain the 5-per-5min
+            # lockout budget on every ordinary login for a TOTP-enabled
+            # account.
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="totp_code_required"
             )
+        registry = auth_registry(request)
+        # A distinct key from the password step's own `source`: that step's
+        # authenticate_password() unconditionally clear_failures()es on
+        # every successful password check (correct by itself -- it has no
+        # notion of a pending 2nd factor), which would otherwise wipe out
+        # this counter's accumulated failures on every subsequent login
+        # attempt before the TOTP check even ran, since the password is the
+        # same valid one each time.
+        source = f"totp:{request.client.host if request.client else 'unknown'}"
+        if not registry.login_allowed(source):
+            raise HTTPException(status_code=429, detail="too many failed login attempts")
         if secret is None or not AdminTotpService(config).verify_code(secret, payload.totp_code):
+            # Unlike a missing code, a wrong one IS a guess -- the password
+            # step alone used to leave the 6-digit TOTP code itself
+            # brute-forceable with unlimited attempts once an attacker had
+            # (or guessed/leaked) the password.
+            registry.record_failure(source)
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid_totp_code"
             )
+        registry.clear_failures(source)
     token, session = auth_registry(request).create(payload.username)
     response.set_cookie(
         SESSION_COOKIE,

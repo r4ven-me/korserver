@@ -5,21 +5,6 @@ from korserver.services.command import CommandResult
 from korserver.services.diagnostics import DiagnosticProbe, DiagnosticsService
 
 
-def test_missing_nft_table_is_informational_in_direct_mode() -> None:
-    config = AppConfig.model_validate({"routing": {"mode": "direct"}})
-    probe = DiagnosticProbe(
-        "nft filter table",
-        ("nft", "list", "table", "inet", "korserver_filter"),
-    )
-    result = CommandResult(probe.argv, 1, "", "Error: No such file or directory")
-
-    normalized = DiagnosticsService(config).normalize(probe, result)
-
-    assert normalized.returncode == 0
-    assert "direct routing mode" in normalized.stdout
-    assert "not installed yet" not in normalized.stdout
-
-
 def test_missing_nft_table_warns_when_routing_needs_nftables() -> None:
     config = AppConfig.model_validate({"routing": {"mode": "split"}})
     probe = DiagnosticProbe("nft nat table", ("nft", "list", "table", "ip", "korserver_nat"))

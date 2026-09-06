@@ -78,6 +78,30 @@ def _validate_interface_name(value: str) -> str:
     return value
 
 
+RESERVED_ROUTING_TABLE_IDS = frozenset({253, 254, 255})
+
+
+def _validate_routing_table_id(value: int, *, field_name: str) -> int:
+    if value in RESERVED_ROUTING_TABLE_IDS:
+        raise ValueError(
+            f"{field_name} must not be one of the kernel-reserved routing "
+            f"table IDs {sorted(RESERVED_ROUTING_TABLE_IDS)} "
+            "(default/main/local) -- using one would corrupt the host's own "
+            "routing table"
+        )
+    return value
+
+
+def profile_safe_name(name: str) -> str:
+    """Normalize an upstream profile name into an nftables-safe identifier
+    for set names (e.g. "My-VPN" -> "my_vpn"). Shared with
+    RoutingService.list_targets() so the uniqueness check in
+    UpstreamConfig.validate_profiles() below stays in sync with what actually
+    gets rendered -- two profiles colliding on their normalized name would
+    otherwise make the whole nft ruleset load fail."""
+    return re.sub(r"[^a-z0-9_]", "_", name.lower())
+
+
 class LogRotationConfig(StrictModel):
     enabled: bool = False
     # 0 disables the size trigger.
@@ -297,6 +321,38 @@ class UpstreamProfileConfig(StrictModel):
     # part of the port number itself. Optional -- most upstreams don't use
     # camouflage.
     camouflage_secret: str | None = None
+    # Route these specific CIDRs/domains through THIS profile specifically,
+    # regardless of which profile is active/default. Distinct from
+    # routing.split.routes/domains, which target whichever profile is
+    # currently active. Gets its own fwmark/table/kill-switch, auto-derived
+    # -- see RoutingService.list_targets().
+    routes: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    # Explicit override for the fwmark/table_id offset this profile's named
+    # routing target uses (see RoutingService.list_targets()). Unset ->
+    # derived from this profile's fixed position in upstream.profiles, the
+    # same "explicit wins, otherwise stable by list position" pattern as
+    # `interface` above -- deriving it from a count of *other* profiles that
+    # currently have routes/domains would silently reassign this profile's
+    # live fwmark/table whenever an unrelated profile's routes/domains change.
+    routing_offset: int | None = Field(default=None, ge=1)
+
+    @field_validator("name")
+    @classmethod
+    def validate_name(cls, value: str) -> str:
+        if not re.match(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$", value):
+            raise ValueError("upstream.profiles[].name must be a short identifier")
+        return value
+
+    @field_validator("routes")
+    @classmethod
+    def validate_routes(cls, value: list[str]) -> list[str]:
+        return [_validate_cidr(item) for item in value]
+
+    @field_validator("domains")
+    @classmethod
+    def validate_domains(cls, value: list[str]) -> list[str]:
+        return [_validate_domain(item) for item in value]
 
     @field_validator("check_host")
     @classmethod
@@ -383,6 +439,27 @@ class UpstreamConfig(StrictModel):
                 "upstream profiles must use distinct interfaces so their "
                 "connections can be up simultaneously"
             )
+        # The nftables set name for a profile's named routing target is its
+        # name normalized to [a-z0-9_] (see RoutingService.list_targets());
+        # two distinct names colliding after normalization (e.g. "My-VPN" and
+        # "my_vpn") would render two identically-named nft sets and break the
+        # whole ruleset load.
+        safe_names = [profile_safe_name(profile.name) for profile in self.profiles]
+        if len(safe_names) != len(set(safe_names)):
+            raise ValueError(
+                "upstream profile names must remain distinct once normalized to "
+                "a-z0-9_ for their nftables set names"
+            )
+        # Each profile's fwmark/table_id offset (explicit routing_offset, or
+        # derived from list position -- see profile_routing_offset()) must be
+        # unique so two profiles' named routing targets never share a
+        # fwmark/table.
+        offsets = [self.profile_routing_offset(profile) for profile in self.profiles]
+        if len(offsets) != len(set(offsets)):
+            raise ValueError(
+                "upstream profiles must use distinct routing_offset values "
+                "(or leave it unset so it's derived from list position)"
+            )
         return self
 
     def selected_profile(self) -> UpstreamProfileConfig | None:
@@ -419,14 +496,29 @@ class UpstreamConfig(StrictModel):
                 return self.interface if index == 0 else f"oc-up{index}"
         return self.interface
 
+    def profile_routing_offset(self, profile: UpstreamProfileConfig) -> int:
+        """fwmark/table_id offset for this profile's own named routing
+        target, added to routing.fwmark/table_id (see
+        RoutingService.list_targets()).
+
+        Explicit profile.routing_offset wins. Without it, derived from this
+        profile's fixed 1-based position in upstream.profiles -- the same
+        "explicit override, otherwise stable by list position" pattern as
+        profile_interface() above. Deriving it instead from a count of only
+        the *other* profiles that currently have routes/domains assigned
+        would silently reassign this profile's live fwmark/table whenever an
+        unrelated profile's routes/domains change.
+        """
+        if profile.routing_offset is not None:
+            return profile.routing_offset
+        for index, candidate in enumerate(self.profiles):
+            if candidate.name == profile.name:
+                return index + 1
+        return 1
+
 
 class RoutingSplitConfig(StrictModel):
     tunnel_dns: bool = False
-    # Route the server host's own traffic through the split rules too: marks
-    # host-originated packets to split destinations in the nftables output
-    # hook, so the host follows the same routes/domain masks as VPN clients
-    # without connecting to its own ocserv. Split mode only.
-    host_traffic: bool = False
     dnsmasq_listen: str = "10.10.10.1"
     dnsmasq_port: int = Field(default=53, ge=1, le=65535)
     routes_file: Path = Path("/var/lib/korserver/routes.txt")
@@ -453,7 +545,16 @@ class RoutingSplitConfig(StrictModel):
 
 
 class RoutingConfig(StrictModel):
-    mode: Literal["direct", "full", "split"] = "full"
+    mode: Literal["full", "split"] = "full"
+    # Route the server host's own traffic through upstream too: marks
+    # host-originated packets in the nftables output hook, so the host
+    # follows the same treatment as VPN clients without connecting to its
+    # own ocserv. Independent of `mode` -- host_mode picks full/split for the
+    # host's own traffic on its own terms, so e.g. "client full + host full"
+    # marks all host traffic unconditionally instead of reusing the split
+    # sets to approximate it.
+    host_traffic: bool = False
+    host_mode: Literal["full", "split"] = "full"
     main_interface: str = "auto"
     fwmark: str = "0x0c01"
     table_id: int = Field(default=1201, ge=1)
@@ -470,8 +571,19 @@ class RoutingConfig(StrictModel):
     @field_validator("fwmark")
     @classmethod
     def validate_fwmark(cls, value: str) -> str:
-        int(value, 0)
+        parsed = int(value, 0)
+        if parsed == 0:
+            # An unmarked packet's implicit mark is 0, so a fwmark of 0 would
+            # make the forward kill-switch's "oifname != <tunnel> drop" rule
+            # (templates/nftables.nft.j2) match virtually all forwarded
+            # traffic, not just the traffic korserver actually marked.
+            raise ValueError("routing.fwmark must not be 0")
         return value
+
+    @field_validator("table_id")
+    @classmethod
+    def validate_table_id(cls, value: int) -> int:
+        return _validate_routing_table_id(value, field_name="routing.table_id")
 
 
 class InternalDnsConfig(StrictModel):
@@ -705,12 +817,24 @@ class AppConfig(StrictModel):
                 raise ValueError(
                     "routing.split.routes must not contain the VPN client subnet itself"
                 )
-        if self.routing.mode in {"full", "split"} and self.upstream.enabled:
+        if self.upstream.enabled:
             profile = self.upstream.selected_profile()
             if profile and profile.check_host:
                 check_ip = ipaddress.ip_address(profile.check_host)
                 if check_ip in vpn_network:
                     raise ValueError("upstream.check_host must not be inside the VPN client subnet")
+            # Each profile's own named routing target (RoutingService.
+            # list_targets()) uses routing.table_id + its offset -- reject
+            # any derived table landing on a kernel-reserved ID, the same
+            # check routing.table_id itself already gets.
+            for target_profile in self.upstream.profiles:
+                derived_table_id = self.routing.table_id + self.upstream.profile_routing_offset(
+                    target_profile
+                )
+                _validate_routing_table_id(
+                    derived_table_id,
+                    field_name=f"upstream.profiles[{target_profile.name!r}]'s derived table_id",
+                )
         if self.dns_tunnel_active():
             listen_ip = ipaddress.ip_address(self.routing.split.dnsmasq_listen)
             if listen_ip not in vpn_network:
@@ -722,9 +846,18 @@ class AppConfig(StrictModel):
         return self
 
     def dns_tunnel_active(self) -> bool:
-        """The project-owned dnsmasq instance must run (Internal DNS or split DNS)."""
-        return self.internal_dns.enabled or (
-            self.routing.mode == "split" and self.routing.split.tunnel_dns
+        """The project-owned dnsmasq instance must run: Internal DNS, split
+        DNS, or any named upstream target has its own domains -- those need
+        dnsmasq running to resolve them into their own nftables set,
+        otherwise a client's query for that domain never gets marked and its
+        traffic never reaches the profile it was assigned to."""
+        named_target_domains = self.upstream.enabled and any(
+            profile.domains for profile in self.upstream.profiles
+        )
+        return (
+            self.internal_dns.enabled
+            or (self.routing.mode == "split" and self.routing.split.tunnel_dns)
+            or named_target_domains
         )
 
     def client_dns_servers(self) -> list[str]:

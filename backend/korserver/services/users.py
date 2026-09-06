@@ -13,7 +13,12 @@ from korserver.config.models import DOMAIN_RE, AppConfig
 from korserver.services.command import CommandResult, CommandRunner
 from korserver.services.files import FileManager
 
-USERNAME_RE = re.compile(r"^[A-Za-z0-9_.@-]{1,64}$")
+# The negative lookahead rejects exactly "." or ".." (but not e.g. "john.doe"
+# or "...", which have no special meaning to the filesystem): username- and
+# group-derived paths (user_config_path()/group_config_path() below) append
+# no filename suffix, so an unsanitized "." or ".." would resolve to the
+# config directory itself or its parent.
+USERNAME_RE = re.compile(r"^(?!\.{1,2}$)[A-Za-z0-9_.@-]{1,64}$")
 HOSTNAME_RE = re.compile(
     r"^(?=.{1,253}$)(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)*"
     r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"

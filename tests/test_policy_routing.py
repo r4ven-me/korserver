@@ -38,17 +38,6 @@ def test_apply_deletes_then_adds_the_rule_and_replaces_the_route() -> None:
     ]
 
 
-def test_apply_is_a_noop_cleanup_in_direct_mode() -> None:
-    runner = FakeRunner()
-
-    PolicyRoutingService(_config("direct"), runner=runner).apply()
-
-    assert runner.calls == [
-        ["ip", "rule", "del", "fwmark", "0x0c01", "table", "1201", "priority", "100"],
-        ["ip", "route", "flush", "table", "1201"],
-    ]
-
-
 def test_cleanup_deletes_the_rule_and_flushes_the_table() -> None:
     runner = FakeRunner()
 
@@ -100,11 +89,3 @@ def test_ensure_skips_rule_add_when_rule_already_present() -> None:
     assert runner.calls[-1] == [
         "ip", "route", "replace", "default", "dev", "oc-middle0", "table", "1201",
     ]
-
-
-def test_ensure_is_a_noop_in_direct_mode() -> None:
-    runner = FakeRunner()
-
-    PolicyRoutingService(_config("direct"), runner=runner).ensure("oc-middle0")
-
-    assert runner.calls == []

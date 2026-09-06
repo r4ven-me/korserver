@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import secrets
+import threading
 import urllib.parse
 from dataclasses import dataclass
 
@@ -9,6 +10,13 @@ from korserver.config.models import AppConfig
 from korserver.services.command import CommandResult, CommandRunner
 from korserver.services.files import FileManager
 from korserver.services.users import UserService
+
+# Serializes the read-modify-write cycle on users.oath, the same hazard
+# users.py's _PASSWD_REWRITE_LOCK protects against for ocpasswd: two
+# concurrent enable/disable calls would otherwise each read the same
+# original file and the last write would silently discard the other's
+# change.
+_OATH_REWRITE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -47,25 +55,33 @@ class OtpService:
         self.users.validate_username(username)
         secret = self.generate_secret()
         self.files.ensure_dir(self.config.system.secrets_dir, mode=0o700)
-        lines = [
-            line
-            for line in self.files.read_lines(self.oath_file)
-            if line.split()[1:2] != [username]
-        ]
-        lines.append(f"HOTP/T30/6 {username} - {secret}")
-        self.files.atomic_write_private_text(self.oath_file, "\n".join(lines) + "\n")
+        with _OATH_REWRITE_LOCK:
+            lines = [
+                line
+                for line in self.files.read_lines(self.oath_file)
+                if line.split()[1:2] != [username]
+            ]
+            lines.append(f"HOTP/T30/6 {username} - {secret}")
+            self.files.atomic_write_private_text(self.oath_file, "\n".join(lines) + "\n")
         return secret
 
     def disable(self, username: str) -> bool:
         self.users.validate_username(username)
-        lines = self.files.read_lines(self.oath_file)
-        kept = [line for line in lines if line.split()[1:2] != [username]]
-        changed = len(kept) != len(lines)
-        if changed:
-            self.files.atomic_write_private_text(
-                self.oath_file,
-                "\n".join(kept) + ("\n" if kept else ""),
-            )
+        # Explicit, not just relying on atomic_write_private_text's own
+        # auto-created-parent fallback (which uses a world-readable 0o755
+        # default) -- matches enable() above so this directory is never
+        # created with looser permissions depending on which OTP operation
+        # happens to run first.
+        self.files.ensure_dir(self.config.system.secrets_dir, mode=0o700)
+        with _OATH_REWRITE_LOCK:
+            lines = self.files.read_lines(self.oath_file)
+            kept = [line for line in lines if line.split()[1:2] != [username]]
+            changed = len(kept) != len(lines)
+            if changed:
+                self.files.atomic_write_private_text(
+                    self.oath_file,
+                    "\n".join(kept) + ("\n" if kept else ""),
+                )
         return changed
 
     def secret_for_user(self, username: str) -> str | None:

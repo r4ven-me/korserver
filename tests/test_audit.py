@@ -52,3 +52,24 @@ def test_mutating_api_request_is_audited_without_credentials(tmp_path: Path) -> 
     assert '"actor":"admin"' in content
     assert '"action":"POST /api/config/render"' in content
     assert "secret" not in content
+
+
+def test_mutation_succeeds_even_when_the_audit_log_write_fails(tmp_path: Path) -> None:
+    # Regression test: AuditService.record() was called unconditionally with
+    # no exception handling in the security_headers middleware, AFTER the
+    # mutating action already fully executed. A write failure (disk full,
+    # permissions, a read-only mount) used to propagate as an unhandled 500
+    # through Starlette's BaseHTTPMiddleware, giving the client no
+    # indication the underlying action actually succeeded.
+    config = _config(tmp_path)
+    client = TestClient(create_app(config))
+    audit_path = tmp_path / "logs" / "audit.jsonl"
+    audit_path.parent.mkdir(parents=True)
+    # Pre-create the log path AS A DIRECTORY: os.open(..., O_WRONLY) on it
+    # raises IsADirectoryError (an OSError subclass), simulating a write
+    # failure without needing to mock internals.
+    audit_path.mkdir()
+
+    response = client.post("/api/config/render", auth=("admin", "secret"))
+
+    assert response.status_code == 200

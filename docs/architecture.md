@@ -47,44 +47,75 @@
    - REST API.
    - Optional Web GUI.
 
-## Backend package proposal
+## Backend package layout
+
+The tree below is the actual current layout (not an aspirational proposal) --
+regenerate it with `find backend/korserver -name '*.py' | sort` if it drifts.
+`api/routes_*.py` follows a one-file-per-resource convention; `services/`
+holds all business logic reusable by both the CLI and the API, per
+`AGENTS.md`'s "CLI and API must call the same services" rule.
 
 ```text
 korserver/
 ├── __init__.py
+├── __main__.py
 ├── main.py
 ├── cli.py
+├── healthcheck.py
 ├── api/
 │   ├── app.py
 │   ├── auth.py
-│   ├── routes_users.py
-│   ├── routes_sessions.py
+│   ├── routes_auth.py
+│   ├── routes_certificates.py
+│   ├── routes_client_sync.py
 │   ├── routes_config.py
+│   ├── routes_diagnostics.py
+│   ├── routes_groups.py
+│   ├── routes_identity.py
+│   ├── routes_internal_dns.py
+│   ├── routes_logs.py
 │   ├── routes_routing.py
+│   ├── routes_server.py
+│   ├── routes_sessions.py
+│   ├── routes_terminal.py
 │   ├── routes_upstream.py
-│   └── routes_diagnostics.py
+│   ├── routes_users.py
+│   └── routes_web_config.py
 ├── config/
 │   ├── defaults.py
-│   ├── loader.py
 │   ├── env.py
+│   ├── loader.py
 │   └── models.py
 ├── services/
-│   ├── command.py
-│   ├── files.py
-│   ├── ocserv.py
-│   ├── users.py
+│   ├── admin_totp.py
+│   ├── audit.py
 │   ├── certificates.py
+│   ├── command.py
+│   ├── config.py
+│   ├── diagnostics.py
+│   ├── files.py
+│   ├── groups.py
+│   ├── internal_dns.py       # the built-in blocking DNS resolver + dnsmasq config
+│   ├── logs.py
+│   ├── network_stats.py
+│   ├── nftables.py
 │   ├── otp.py
+│   ├── password_hash.py
+│   ├── policy_routing.py     # fwmark ip-rule/route management
+│   ├── routing.py            # split routes/domains, RoutingTarget derivation
+│   ├── secrets.py
+│   ├── server.py
+│   ├── server_certificates.py  # Let's Encrypt / external cert upload
 │   ├── sessions.py
+│   ├── software_versions.py
+│   ├── supervisor_rpc.py
 │   ├── upstream.py
-│   ├── routing.py
-│   ├── dnsmasq.py
-│   ├── nftables.py
-│   └── diagnostics.py
+│   └── users.py
 ├── renderers/
-│   ├── ocserv.py
+│   ├── base.py
 │   ├── dnsmasq.py
 │   ├── nftables.py
+│   ├── ocserv.py
 │   └── supervisor.py
 └── schemas/
 ```
@@ -94,7 +125,9 @@ korserver/
 ### Normal VPN server mode
 
 - ocserv accepts user connections directly.
-- traffic can be direct, NATed through host interface, or routed according to config.
+- client traffic is always NATed through the host interface by default; enabling
+  upstream additionally routes it (fully or by split routes/domains) through a
+  private upstream connection instead.
 
 ### Middle-server mode
 
@@ -115,7 +148,13 @@ korserver/
   independent of this) is `routing.mode`, one web section ("Upstream", merged
   with the former standalone "Routing" tab so the two aren't presented as
   unrelated features):
-  - `direct`: korserver does not manage NAT/routing for the VPN subnet at all;
+  - Both modes are only about *upstream* egress and are inert without one:
+    with `upstream.enabled: false`, VPN clients always get plain masquerade
+    through the host (`main_interface`, or any interface if `auto`) regardless
+    of which mode is configured -- mode has nothing to route into otherwise.
+    There is no "off"/"direct" mode: once upstream is enabled, korserver
+    always manages NAT/routing for it -- `full` by default, optionally
+    narrowed to `split`.
   - `full`: all VPN client traffic is marked and forced through the upstream
     interface via a dedicated policy-routing table (`ip rule`/`ip route`,
     `routing.fwmark`/`routing.table_id`); an nftables `forward` rule drops any
@@ -132,14 +171,23 @@ korserver/
     split-DNS domain resolution feeds the same nftables set; clients doing
     their *own* split routing/DNS locally instead just point their own
     resolver at this server's VPN address.
-  - `routing.split.host_traffic` extends split mode to the **server host's own
-    traffic**: an nftables `output` chain (`type route hook output`) marks
-    host-originated packets whose destination is in the split sets, so they hit
-    the same fwmark policy route (and, with upstream enabled, the same
-    kill-switch via a `postrouting` filter chain — postrouting on purpose: an
-    output-hook filter chain shares its nf_hook_state with the route chain
-    and still sees the pre-reroute oifname, so it would drop every marked
-    host packet even with the tunnel up). Only connections the
+  - `routing.host_traffic` extends routing to the **server host's own
+    traffic**, independent of the client-facing `routing.mode`: an nftables
+    `output` chain (`type route hook output`) marks host-originated packets,
+    so they hit the same fwmark policy route (and, with upstream enabled, the
+    same kill-switch via a `postrouting` filter chain — postrouting on
+    purpose: an output-hook filter chain shares its nf_hook_state with the
+    route chain and still sees the pre-reroute oifname, so it would drop
+    every marked host packet even with the tunnel up). `routing.host_mode`
+    (`full`/`split`) picks which packets get marked, mirroring the
+    client-facing mode's own full/split logic but decided on its own terms:
+    `split` marks only destinations in the split sets (as before); `full`
+    marks all host-originated traffic unconditionally — same caveat as split
+    routes never covering the upstream server's own address, but sharper
+    here since there's no curated list to keep it out of: the outbound
+    openconnect carrier connection itself would get marked and try to route
+    through the tunnel it's still establishing, a loop. Prefer `split` with a
+    curated route list when precision matters. Only connections the
     host itself initiated are marked (`ct direction original`) — replies to
     inbound connections (SSH, the panel, ocserv sessions) keep their normal
     route. Marked host traffic is additionally masqueraded to the upstream
@@ -148,17 +196,15 @@ korserver/
     tunnel egress), so without it they would enter the tunnel with the uplink
     source and replies would never return — this also silently kills dnsmasq's
     own queries to an upstream DNS reached through the tunnel, draining the
-    domain-fed split sets. For domain masks to apply to the host too, point the host's
-    resolver at `routing.split.dnsmasq_listen` (the address already sits on
-    `lo`, see "Listen address lifecycle"): `nameserver 10.10.10.1` in
+    domain-fed split sets. For domain masks to apply to the host too (in
+    `host_mode: split`), point the host's resolver at
+    `routing.split.dnsmasq_listen` (the address already sits on `lo`, see
+    "Listen address lifecycle"): `nameserver 10.10.10.1` in
     `/etc/resolv.conf`. This replaces the tempting-but-broken pattern of
     connecting the host to its own ocserv as a client: such a session's sync
     requests to `/api/client/routing` arrive over loopback with a non-tunnel
-    source address and fail the VPN-session check. Split mode only: in full
-    mode "all host traffic via upstream" would also capture the upstream
-    tunnel's own packets and loop. Caveat: split routes/domains must not
-    cover the upstream server's own address, or the tunnel carrier traffic
-    itself gets marked into the tunnel. **Requires `network_mode: host`** — the
+    source address and fail the VPN-session check. **Requires
+    `network_mode: host`** — the
     project's `compose.yaml` uses it by default precisely for this and to drop
     an extra NAT hop for VPN traffic in general (see README's Quick Start), not
     as an opt-in for this one feature. Under the bridge network + port mapping
@@ -168,14 +214,38 @@ korserver/
     packets never traverse the container's netfilter, so the feature silently
     does nothing for the host and `ip route show table <id>` on the host stays
     empty.
-  - In full/split the upstream openconnect runs with a minimal
-    interface-only vpnc-script (`templates/vpnc-script-korserver`, installed
-    into generated_dir on connect): the fwmark policy routing owns all
-    tunnel egress, so upstream-pushed routes/DNS must not touch the
-    namespace's routing table or resolv.conf — under `network_mode: host`
-    the distribution vpnc-script would hijack the host's default route.
-    Direct mode keeps the distribution script and its full route/DNS
-    handling.
+  - The upstream openconnect always runs with a minimal interface-only
+    vpnc-script (`templates/vpnc-script-korserver`, installed into
+    generated_dir on connect): the fwmark policy routing owns all tunnel
+    egress, so upstream-pushed routes/DNS must not touch the namespace's
+    routing table or resolv.conf — under `network_mode: host` the
+    distribution vpnc-script would hijack the host's default route.
+  - **Per-profile targeted routes/domains**: any `upstream.profiles[]` entry
+    can list its own `routes` (CIDRs) and/or `domains`, independent of
+    whether that profile is the active one. `RoutingService.list_targets()`
+    is the single source of truth: it always yields a `"default"` target
+    (the top-level `routing.mode`/routes/domains, following whichever
+    profile is active), plus one extra target per profile that has its own
+    `routes`/`domains` — each gets its own auto-derived fwmark/table
+    (`routing.fwmark`/`table_id` + a per-target offset, 1, 2, 3... in
+    profile list order, zero-padded to match the configured fwmark's width),
+    its own nftables sets (`split_v4_<profile>`/`split_v6_<profile>`) fed by
+    dnsmasq for its domains, and its own kill switch — unconditional even if
+    that profile itself is currently disabled/not dialed, since traffic
+    explicitly assigned to it should never silently leak out a different
+    path. These targeted profiles only exist at all when `upstream.enabled`
+    is true globally; nftables/prerouting marks the default target first and
+    named targets after (so a named target's more specific match overrides
+    the default's broader one for the same packet), while NAT masquerade
+    renders named targets first and the default last (so the default's
+    catch-all branch never steals a decision from a more specific target).
+    A profile with its own routes/domains still gets its own target even
+    while it's also the active (default) profile — the two targets end up
+    pointing at the same interface but keep separate fwmarks/tables, which
+    is harmless (the named target's more specific match just wins first)
+    and avoids special-casing "is this profile currently the default" in
+    `list_targets()`. Configured from the Upstream tab's profile editor
+    ("Target routes"/"Target domains" fields).
 - `upstream.check_interval`/`check_threshold`/`failover` drive a supervised
   watchdog (`[program:upstream-watchdog]`, `korctl upstream watch`) that pings
   the active profile's `check_host` **through the tunnel interface**

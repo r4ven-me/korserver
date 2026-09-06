@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import base64
+import fcntl
 import os
 import subprocess
 import sys
@@ -9,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from korserver.config.models import AppConfig, UpstreamProfileConfig
 from korserver.services import upstream as upstream_module
@@ -107,7 +109,153 @@ def _config(tmp_path: Path) -> AppConfig:
     )
 
 
-def test_openconnect_argv_uses_minimal_vpnc_script_in_split_mode(tmp_path: Path) -> None:
+def _upstream_config(tmp_path: Path, **upstream: object) -> dict[str, object]:
+    return {
+        "system": {
+            "data_dir": tmp_path / "data",
+            "generated_dir": tmp_path / "generated",
+            "secrets_dir": tmp_path / "secrets",
+        },
+        "routing": {"fwmark": "0x0c01", "table_id": 1201},
+        "upstream": {"enabled": True, **upstream},
+    }
+
+
+def test_upstream_profile_name_rejects_path_traversal_characters(tmp_path: Path) -> None:
+    # Regression test: profile.name is used unsanitized as a path segment in
+    # _profile_secrets_dir() (secrets_dir / "upstream" / profile.name), which
+    # receives attacker-controllable base64 cert/key material via the admin
+    # API -- an unvalidated "../" would be a path-traversal / arbitrary file
+    # write.
+    with pytest.raises(ValidationError, match="short identifier"):
+        AppConfig.model_validate(
+            _upstream_config(
+                tmp_path,
+                profiles=[
+                    {
+                        "name": "../evil",
+                        "server": "vpn.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                    }
+                ],
+            )
+        )
+
+
+def test_upstream_profiles_with_colliding_safe_names_are_rejected(tmp_path: Path) -> None:
+    # "My-VPN" and "my_vpn" both normalize to the same nftables set name
+    # (RoutingService.list_targets()'s profile_safe_name()), which would
+    # break the whole ruleset load.
+    with pytest.raises(ValidationError, match="normalized"):
+        AppConfig.model_validate(
+            _upstream_config(
+                tmp_path,
+                profiles=[
+                    {
+                        "name": "My-VPN",
+                        "server": "a.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "interface": "oc-a",
+                        "routes": ["10.1.0.0/16"],
+                    },
+                    {
+                        "name": "my_vpn",
+                        "server": "b.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "interface": "oc-b",
+                        "routes": ["10.2.0.0/16"],
+                    },
+                ],
+            )
+        )
+
+
+def test_upstream_profiles_with_colliding_routing_offsets_are_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="routing_offset"):
+        AppConfig.model_validate(
+            _upstream_config(
+                tmp_path,
+                profiles=[
+                    {
+                        "name": "a",
+                        "server": "a.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "interface": "oc-a",
+                        "routing_offset": 5,
+                    },
+                    {
+                        "name": "b",
+                        "server": "b.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "interface": "oc-b",
+                        "routing_offset": 5,
+                    },
+                ],
+            )
+        )
+
+
+def test_routing_fwmark_zero_is_rejected(tmp_path: Path) -> None:
+    # fwmark 0 is an unmarked packet's implicit mark -- using it would make
+    # the forward kill-switch's "oifname != <tunnel> drop" rule match
+    # virtually all forwarded traffic, not just what korserver marked.
+    with pytest.raises(ValidationError, match="must not be 0"):
+        AppConfig.model_validate(
+            {
+                "system": {
+                    "data_dir": tmp_path / "data",
+                    "generated_dir": tmp_path / "generated",
+                    "secrets_dir": tmp_path / "secrets",
+                },
+                "routing": {"fwmark": "0x0"},
+            }
+        )
+
+
+@pytest.mark.parametrize("table_id", [253, 254, 255])
+def test_routing_table_id_rejects_kernel_reserved_values(tmp_path: Path, table_id: int) -> None:
+    with pytest.raises(ValidationError, match="reserved"):
+        AppConfig.model_validate(
+            {
+                "system": {
+                    "data_dir": tmp_path / "data",
+                    "generated_dir": tmp_path / "generated",
+                    "secrets_dir": tmp_path / "secrets",
+                },
+                "routing": {"table_id": table_id},
+            }
+        )
+
+
+def test_derived_per_profile_table_id_rejects_kernel_reserved_values(tmp_path: Path) -> None:
+    # routing.table_id (252) + this profile's offset (1, the only profile)
+    # lands on 253, a kernel-reserved table -- must be rejected even though
+    # the top-level table_id itself is fine on its own.
+    with pytest.raises(ValidationError, match="reserved"):
+        AppConfig.model_validate(
+            _upstream_config(
+                tmp_path,
+                profiles=[
+                    {
+                        "name": "a",
+                        "server": "a.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "interface": "oc-a",
+                        "routes": ["10.1.0.0/16"],
+                    },
+                ],
+            )
+            | {"routing": {"fwmark": "0x0c01", "table_id": 252}}
+        )
+
+
+def test_openconnect_argv_always_uses_minimal_vpnc_script(tmp_path: Path) -> None:
     config = AppConfig.model_validate(
         {
             "system": {
@@ -161,28 +309,6 @@ def test_openconnect_argv_omits_camouflage_suffix_when_unset(tmp_path: Path) -> 
     argv = UpstreamService(config).openconnect_argv(profile)
 
     assert argv[-1] == "vpn.example.com:443"
-
-
-def test_openconnect_argv_keeps_distribution_vpnc_script_in_direct_mode(
-    tmp_path: Path,
-) -> None:
-    config = AppConfig.model_validate(
-        {
-            "system": {
-                "data_dir": tmp_path / "data",
-                "generated_dir": tmp_path / "generated",
-                "secrets_dir": tmp_path / "secrets",
-            },
-            "routing": {"mode": "direct"},
-        }
-    )
-    profile = UpstreamProfileConfig(
-        name="primary", server="vpn.example.com", auth_type="password", username="user"
-    )
-
-    argv = UpstreamService(config).openconnect_argv(profile)
-
-    assert not [arg for arg in argv if arg.startswith("--script=")]
 
 
 def test_openconnect_argv_uses_cert_file_path_directly(tmp_path: Path) -> None:
@@ -597,7 +723,9 @@ def test_connect_active_applies_nftables_before_dialing_when_mode_not_direct(
         runner.close()
 
     programs = [call["argv"][0] for call in runner.calls]
-    assert programs.count("nft") == 3  # delete filter table, delete nat table, nft -f
+    # A single atomic `nft -f` load now folds the old table delete/redefine
+    # sequence into one transaction (see templates/nftables.nft.j2).
+    assert programs.count("nft") == 1
     assert programs.index("nft") < programs.index("openconnect")
 
 
@@ -618,28 +746,6 @@ def test_connect_active_applies_policy_routing_after_successful_connect(
     assert ["ip", "route", "replace", "default", "dev", "oc-middle0", "table", "1201"] in ip_calls
 
 
-def test_connect_active_skips_nftables_and_does_not_add_a_policy_route_in_direct_mode(
-    tmp_path: Path,
-) -> None:
-    config = _config(tmp_path)
-    config.routing.mode = "direct"
-    config.upstream.profiles.append(_profile())
-    config.upstream.active_profile = "primary"
-    runner = FakeRunner(tmp_path)
-    service = UpstreamService(config, runner=runner)
-    try:
-        service.connect_active()
-    finally:
-        runner.close()
-
-    # nftables is skipped entirely; policy routing still runs its cleanup
-    # path (to remove any stale rule from a previous full/split config) but
-    # must not install a route, since "direct" means korserver stays out of
-    # routing decisions altogether.
-    assert not any(call["argv"][0] == "nft" for call in runner.calls)
-    assert not any(call["argv"][:3] == ["ip", "route", "replace"] for call in runner.calls)
-
-
 def test_disconnect_cleans_up_policy_routing(tmp_path: Path) -> None:
     process = _spawn_fake_openconnect(tmp_path)
     runner = FakeRunner()
@@ -654,6 +760,107 @@ def test_disconnect_cleans_up_policy_routing(tmp_path: Path) -> None:
 
     ip_calls = [call["argv"] for call in runner.calls if call["argv"][0] == "ip"]
     assert ["ip", "route", "flush", "table", "1201"] in ip_calls
+
+
+def test_connect_applies_policy_routing_for_a_named_target_even_when_not_active(
+    tmp_path: Path,
+) -> None:
+    # A profile with its own routes/domains gets its own table pointed at
+    # its own interface as soon as it connects, regardless of which profile
+    # is "active" -- its assigned traffic doesn't depend on that.
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(
+        UpstreamProfileConfig(
+            name="finance",
+            server="finance.example.com",
+            auth_type="password",
+            username="user",
+            interface="oc-finance",
+            routes=["10.50.0.0/16"],
+        )
+    )
+    config.upstream.enabled = True
+    config.upstream.active_profile = "primary"
+    runner = FakeRunner(tmp_path)
+    service = UpstreamService(config, runner=runner)
+    try:
+        service.connect("finance")
+    finally:
+        runner.close()
+
+    ip_calls = [call["argv"] for call in runner.calls if call["argv"][0] == "ip"]
+    # finance is the 2nd configured profile (primary is 1st) -- its routing
+    # offset is derived from that fixed position (2), not from a count of
+    # profiles with routes, so table_id = 1201 + 2 = 1203.
+    assert ["ip", "route", "replace", "default", "dev", "oc-finance", "table", "1203"] in ip_calls
+
+
+def test_disconnect_cleans_up_named_target_policy_routing(tmp_path: Path) -> None:
+    process = _spawn_fake_openconnect(tmp_path)
+    runner = FakeRunner()
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(
+        UpstreamProfileConfig(
+            name="finance",
+            server="finance.example.com",
+            auth_type="password",
+            username="user",
+            interface="oc-finance",
+            routes=["10.50.0.0/16"],
+        )
+    )
+    config.upstream.enabled = True
+    config.upstream.active_profile = "primary"
+    service = UpstreamService(config, runner=runner)
+    finance_profile = config.upstream.profiles[1]
+    path = service._pid_file(finance_profile)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(str(process.pid))
+
+    service.disconnect("finance")
+    process.wait(timeout=2)
+
+    ip_calls = [call["argv"] for call in runner.calls if call["argv"][0] == "ip"]
+    # See the analogous comment in the connect() test above re: offset 2.
+    assert ["ip", "route", "flush", "table", "1203"] in ip_calls
+
+
+def test_ensure_policy_routing_covers_connected_named_targets(tmp_path: Path) -> None:
+    config = _config(tmp_path)
+    config.upstream.profiles.append(_profile("primary"))
+    config.upstream.profiles.append(
+        UpstreamProfileConfig(
+            name="finance",
+            server="finance.example.com",
+            auth_type="password",
+            username="user",
+            interface="oc-finance",
+            routes=["10.50.0.0/16"],
+        )
+    )
+    config.upstream.enabled = True
+    # No active_profile at all -- the default target is inactive, but the
+    # named target must still be maintained on its own.
+    runner = FakeRunner()
+    service = UpstreamService(config, runner=runner)
+    finance_profile = config.upstream.profiles[1]
+    process = _spawn_fake_openconnect(tmp_path)
+    try:
+        path = service._pid_file(finance_profile)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(str(process.pid))
+
+        service.ensure_policy_routing()
+    finally:
+        process.terminate()
+        process.wait(timeout=5)
+
+    ip_calls = [call["argv"] for call in runner.calls if call["argv"][0] == "ip"]
+    assert any(
+        call[:6] == ["ip", "route", "replace", "default", "dev", "oc-finance"] for call in ip_calls
+    )
 
 
 def test_is_healthy_false_when_not_connected(tmp_path: Path) -> None:
@@ -1221,3 +1428,42 @@ def test_status_reports_per_connection_details(tmp_path: Path) -> None:
     assert status.connections[0]["interface"] == "oc-middle0"
     assert status.connections[1]["connected"] is False
     assert status.connections[1]["local_ip"] is None
+
+
+def test_upstream_lock_serializes_across_service_instances(tmp_path: Path) -> None:
+    # Regression test: switch_profile()/connect()/disconnect() etc. used to
+    # have no lock at all, so a manual API call could interleave with a
+    # concurrent watchdog tick (a separate process, each with its own
+    # UpstreamService instance) reading stale state and re-asserting a route
+    # to the wrong interface. Two independently constructed instances here
+    # stand in for "two processes" -- flock() genuinely treats separately
+    # opened file descriptors as unrelated, even from the same PID, so this
+    # exercises the real cross-process mechanism, not just a Python-level
+    # lock that would only ever help within one process anyway.
+    config = _config(tmp_path)
+    service_a = UpstreamService(config)
+    service_b = UpstreamService(config)
+
+    with service_a._locked():
+        lock_path = service_b._lock_path
+        service_b.files.ensure_dir(lock_path.parent)
+        probe_fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+        try:
+            with pytest.raises(BlockingIOError):
+                fcntl.flock(probe_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        finally:
+            os.close(probe_fd)
+
+
+def test_upstream_lock_is_reentrant_within_one_instance(tmp_path: Path) -> None:
+    # Regression test: enforce_profile_enablement()/recover() call
+    # self.connect()/self.disconnect()/self.switch_profile() internally --
+    # all of which also acquire the same lock. Re-locking the SAME fd must
+    # not deadlock (unlike two independently opened fds, see the test
+    # above).
+    config = _config(tmp_path)
+    service = UpstreamService(config)
+
+    with service._locked(), service._locked():
+        pass
+    assert service._lock_depth == 0

@@ -5,12 +5,22 @@ import secrets
 import threading
 import time
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from fastapi import HTTPException, Request, status
 
 from korserver.services.password_hash import verify_password
 
 SESSION_COOKIE = "korserver_session"
+
+# A session renews (slides) its expiry on every use via get() below, so a
+# cookie that's actively used never naturally expires on its own. Cap the
+# total lifetime at a fixed multiple of the configured session_lifetime
+# regardless of activity, so a leaked/stolen cookie can't stay valid
+# indefinitely just by being periodically replayed -- while still letting an
+# admin who is actively using the panel stay logged in past one raw
+# session_lifetime window, unlike a hard `now - created_at > lifetime` cap.
+ABSOLUTE_SESSION_LIFETIME_MULTIPLIER = 4
 
 
 @dataclass(frozen=True)
@@ -24,11 +34,13 @@ class AdminSession:
     username: str
     csrf_token: str
     expires_at: float
+    created_at: float
 
 
 class AuthSessionRegistry:
     def __init__(self, lifetime_seconds: int = 3600) -> None:
         self._lifetime_seconds = lifetime_seconds
+        self._absolute_lifetime_seconds = lifetime_seconds * ABSOLUTE_SESSION_LIFETIME_MULTIPLIER
         self._sessions: dict[str, AdminSession] = {}
         self._failures: dict[str, list[float]] = {}
         self._lock = threading.Lock()
@@ -37,10 +49,12 @@ class AuthSessionRegistry:
         with self._lock:
             self._prune()
             token = secrets.token_urlsafe(48)
+            now = time.monotonic()
             session = AdminSession(
                 username=username,
                 csrf_token=secrets.token_urlsafe(32),
-                expires_at=time.monotonic() + self._lifetime_seconds,
+                expires_at=now + self._lifetime_seconds,
+                created_at=now,
             )
             self._sessions[token] = session
             return token, session
@@ -49,8 +63,9 @@ class AuthSessionRegistry:
         with self._lock:
             self._prune()
             session = self._sessions.get(token)
-            if session is not None:
-                session.expires_at = time.monotonic() + self._lifetime_seconds
+            if session is None:
+                return None
+            session.expires_at = time.monotonic() + self._lifetime_seconds
             return session
 
     def revoke(self, token: str) -> None:
@@ -74,7 +89,12 @@ class AuthSessionRegistry:
 
     def _prune(self) -> None:
         now = time.monotonic()
-        expired = [token for token, session in self._sessions.items() if session.expires_at <= now]
+        expired = [
+            token
+            for token, session in self._sessions.items()
+            if session.expires_at <= now
+            or now - session.created_at > self._absolute_lifetime_seconds
+        ]
         for token in expired:
             self._sessions.pop(token, None)
 
@@ -135,7 +155,37 @@ def require_admin(request: Request) -> None:
             detail="authentication required",
         )
     authenticate_password(request, credentials.username, credentials.password)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+        _reject_cross_origin_basic_request(request)
     request.state.admin_username = credentials.username
+
+
+def _reject_cross_origin_basic_request(request: Request) -> None:
+    """Same-origin check for mutating requests authenticated via HTTP Basic.
+
+    Basic Auth has no CSRF token to check the way the cookie-session branch
+    above does: unlike a JS-issued header, there is no session for a
+    non-browser API client (curl, a script) to have fetched one from. But a
+    BROWSER that has ever authenticated to this origin with Basic Auth
+    caches those credentials and resends them automatically on *any*
+    request to the same origin -- including one triggered by a third-party
+    page's plain `<form method=post>`, which needs no JS and isn't stopped
+    by SameSite cookie rules since no cookie is involved at all. Without
+    this check, that made every mutating endpoint CSRF-exploitable against
+    an admin who had ever used Basic Auth in a browser.
+
+    A browser always sends Origin (or, lacking that, Referer) on a
+    cross-origin state-changing request; a legitimate non-browser client
+    typically sends neither. So only a header that's present AND names a
+    different host is rejected -- its absence is not.
+    """
+    origin = request.headers.get("origin") or request.headers.get("referer")
+    if not origin:
+        return
+    origin_host = urlparse(origin).hostname
+    request_host = (request.headers.get("host") or "").split(":", 1)[0]
+    if origin_host and request_host and origin_host != request_host:
+        raise HTTPException(status_code=403, detail="cross-origin request rejected")
 
 
 def parse_basic_authorization(value: str | None) -> BasicCredentials | None:

@@ -58,11 +58,19 @@ Before coding, read and extract behavior from:
   - deploy-time paths fixed via `.env`/volume mounts at container start:
     `system.data_dir`, `system.log_dir`, `system.generated_dir`, `system.secrets_dir`,
     `identity.config_per_group_dir`, `identity.config_per_user_dir`,
-    `web.tls_cert`, `web.tls_key`, `web.static_dir`;
+    `web.tls_cert`, `web.tls_key`, `web.static_dir`,
+    `routing.split.routes_file`, `routing.split.domains_file` (internal generated-state
+    paths, the same category as the others above — not something an admin edits day to
+    day; the runtime *contents* of these files are what the Upstream tab's route/domain
+    list actually edits);
   - `advanced.raw_ocserv_options` — a free-form escape hatch by design, not a fixed field a
     form can validate meaningfully;
   - `web.admin_password` / `web.admin_password_hash` — go through a dedicated
-    change-password action, not a plain-text field in a general settings dump.
+    change-password action, not a plain-text field in a general settings dump;
+  - `web.admin_totp_enabled` / `web.admin_totp_secret` — same pattern as
+    `admin_password`/`admin_password_hash`: managed entirely through the panel's own
+    two-factor setup/confirm/disable flow (`/api/auth/totp/*`), not a plain-text field in
+    a general settings dump.
 
 ## Target stack
 

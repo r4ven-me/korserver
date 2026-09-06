@@ -1,6 +1,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { login, setCsrfToken, writeRenderedConfig } from "./api";
+import {
+  login,
+  saveRoutingSettings,
+  saveUpstreamProfile,
+  setCsrfToken,
+  writeRenderedConfig,
+  type UpstreamProfileDraft
+} from "./api";
 
 afterEach(() => {
   setCsrfToken(null);
@@ -50,5 +57,100 @@ describe("browser API authentication", () => {
     const headers = new Headers(init.headers);
     expect(init.method).toBe("POST");
     expect(headers.get("X-Korserver-CSRF")).toBe("csrf-value");
+  });
+});
+
+const upstreamProfileDraft: UpstreamProfileDraft = {
+  name: "finance",
+  server: "finance.example.com",
+  port: "443",
+  interface: "oc-finance",
+  auth_type: "password",
+  trusted_cert: false,
+  username: "user",
+  password: "",
+  cert_file: "",
+  cert_file_base64: "",
+  key_file: "",
+  key_file_base64: "",
+  cert_pass: "",
+  server_cert_pin: "",
+  check_host: "",
+  camouflage_secret: "",
+  routes: "",
+  domains: "",
+  enable: true,
+  enabled: true
+};
+
+describe("saveUpstreamProfile", () => {
+  it("splits the newline/comma-separated routes and domains textareas into arrays", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "saved" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveUpstreamProfile("session", {
+      ...upstreamProfileDraft,
+      routes: "10.50.0.0/16, 10.60.0.0/16\n10.70.0.0/16",
+      domains: "internal.example.com,\ncorp.example.com"
+    });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/upstream/profiles");
+    const sent = JSON.parse(String(init.body));
+    expect(sent.routes).toEqual(["10.50.0.0/16", "10.60.0.0/16", "10.70.0.0/16"]);
+    expect(sent.domains).toEqual(["internal.example.com", "corp.example.com"]);
+  });
+
+  it("sends an empty array, not a list with a blank string, for an empty textarea", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "saved" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveUpstreamProfile("session", upstreamProfileDraft);
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(String(init.body));
+    expect(sent.routes).toEqual([]);
+    expect(sent.domains).toEqual([]);
+  });
+});
+
+describe("saveRoutingSettings", () => {
+  it("sends host_traffic/host_mode alongside the rest of the routing payload", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "saved" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveRoutingSettings("session", {
+      mode: "split",
+      tunnel_dns: true,
+      host_traffic: true,
+      host_mode: "split",
+      dnsmasq_listen: "10.10.10.1",
+      dnsmasq_port: 53,
+      main_interface: "auto",
+      fwmark: "0x0c01",
+      table_id: 1201,
+      nft_prefix: "korserver"
+    });
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/routing/settings");
+    const sent = JSON.parse(String(init.body));
+    expect(sent.host_traffic).toBe(true);
+    expect(sent.host_mode).toBe("split");
   });
 });

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -83,13 +84,22 @@ def create_app(
             request.url.path.startswith("/api/")
             and request.method in {"POST", "PUT", "PATCH", "DELETE"}
         ):
-            AuditService(request.app.state.config).record(
-                actor=getattr(request.state, "admin_username", "anonymous"),
-                action=f"{request.method} {request.url.path}",
-                outcome="success" if response.status_code < 400 else "failure",
-                source_ip=request.client.host if request.client else None,
-                details={"status_code": response.status_code},
-            )
+            # Best-effort, same tradeoff as UpstreamService._append_log: the
+            # mutating action itself already fully executed and its
+            # response is already built by the time this runs -- disk
+            # full/read-only/permission issues writing audit.jsonl must not
+            # turn an otherwise-successful request into an unhandled 500
+            # with no indication the action actually succeeded, and must
+            # not swallow the response either (unlike record() failing, the
+            # response itself is unaffected).
+            with contextlib.suppress(OSError):
+                AuditService(request.app.state.config).record(
+                    actor=getattr(request.state, "admin_username", "anonymous"),
+                    action=f"{request.method} {request.url.path}",
+                    outcome="success" if response.status_code < 400 else "failure",
+                    source_ip=request.client.host if request.client else None,
+                    details={"status_code": response.status_code},
+                )
         return response
 
     @app.exception_handler(ValueError)

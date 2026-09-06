@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ipaddress
 import re
+import threading
 from pathlib import Path
 
 from korserver.config.models import AppConfig
@@ -12,6 +13,14 @@ from korserver.services.users import UserService
 _CERT_PEM_RE = re.compile(
     r"-----BEGIN CERTIFICATE-----.*?-----END CERTIFICATE-----", re.DOTALL
 )
+
+# Serializes the read-modify-write cycle on revoked.pem, the same hazard
+# users.py's _PASSWD_REWRITE_LOCK protects against for ocpasswd: two
+# concurrent revocations (e.g. two admin browser tabs) would otherwise each
+# read the same original file and the last write would silently discard the
+# other's revocation -- generate_crl() would then produce a CRL that doesn't
+# actually revoke the certificate that was "lost".
+_REVOKED_REWRITE_LOCK = threading.Lock()
 _CERT_INFO_FIELDS = {
     "serial": re.compile(r"Serial Number \(hex\):\s*(\S+)"),
     "subject": re.compile(r"Subject:\s*(.+)"),
@@ -53,6 +62,15 @@ class CertificateService:
         self.files.atomic_write_text(path, content, mode=0o600)
         return path
 
+    def _chmod_private_key(self, path: Path, *, dry_run: bool) -> None:
+        """certtool writes the key file itself with whatever the process's
+        ambient umask allows (e.g. world-readable under a common 022 umask)
+        -- protection would otherwise rely entirely on cert_dir's own 0o700
+        mode, with no defense-in-depth at the individual file level (e.g. if
+        the key is later copied or bind-mounted out of cert_dir)."""
+        if not dry_run:
+            path.chmod(0o600)
+
     def init_ca(self, *, dry_run: bool = False) -> list[CommandResult]:
         self.files.ensure_dir(self.cert_dir, mode=0o700)
         ca_key = self.config.cert_path("ca.key")
@@ -69,12 +87,14 @@ class CertificateService:
                 ]
             ),
         )
+        privkey_result = self.runner.run(
+            ["certtool", "--generate-privkey", "--outfile", str(ca_key)],
+            timeout=60,
+            dry_run=dry_run,
+        )
+        self._chmod_private_key(ca_key, dry_run=dry_run)
         return [
-            self.runner.run(
-                ["certtool", "--generate-privkey", "--outfile", str(ca_key)],
-                timeout=60,
-                dry_run=dry_run,
-            ),
+            privkey_result,
             self.runner.run(
                 [
                     "certtool",
@@ -134,12 +154,14 @@ class CertificateService:
                 ]
             ),
         )
+        privkey_result = self.runner.run(
+            ["certtool", "--generate-privkey", "--outfile", str(key)],
+            timeout=60,
+            dry_run=dry_run,
+        )
+        self._chmod_private_key(key, dry_run=dry_run)
         return [
-            self.runner.run(
-                ["certtool", "--generate-privkey", "--outfile", str(key)],
-                timeout=60,
-                dry_run=dry_run,
-            ),
+            privkey_result,
             self.runner.run(
                 [
                     "certtool",
@@ -184,12 +206,14 @@ class CertificateService:
                 ]
             ),
         )
+        privkey_result = self.runner.run(
+            ["certtool", "--generate-privkey", "--outfile", str(key)],
+            timeout=60,
+            dry_run=dry_run,
+        )
+        self._chmod_private_key(key, dry_run=dry_run)
         return [
-            self.runner.run(
-                ["certtool", "--generate-privkey", "--outfile", str(key)],
-                timeout=60,
-                dry_run=dry_run,
-            ),
+            privkey_result,
             self.runner.run(
                 [
                     "certtool",
@@ -272,11 +296,12 @@ class CertificateService:
 
     def append_revoked_certificate(self, certificate_pem: str, *, dry_run: bool = False) -> None:
         revoked = self.cert_dir / "revoked.pem"
-        existing = revoked.read_text(encoding="utf-8") if revoked.exists() else ""
         marker = certificate_pem.strip() + "\n"
-        if marker and marker not in existing and not dry_run:
-            self.files.ensure_dir(revoked.parent, mode=0o700)
-            self.files.atomic_write_text(revoked, existing + marker, mode=0o600)
+        with _REVOKED_REWRITE_LOCK:
+            existing = revoked.read_text(encoding="utf-8") if revoked.exists() else ""
+            if marker and marker not in existing and not dry_run:
+                self.files.ensure_dir(revoked.parent, mode=0o700)
+                self.files.atomic_write_text(revoked, existing + marker, mode=0o600)
 
     def list_revoked_certificates(self) -> list[dict[str, str]]:
         revoked = self.cert_dir / "revoked.pem"

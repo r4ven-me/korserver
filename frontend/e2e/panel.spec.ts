@@ -8,14 +8,22 @@ const commandResult = {
   dry_run: false
 };
 
+type MockUser = {
+  username: string;
+  disabled: boolean;
+  certificate_exists: boolean;
+  p12_exists: boolean;
+  groups?: string[];
+};
+
 type MockOptions = {
   terminalEnabled?: boolean;
-  users?: Array<{
-    username: string;
-    disabled: boolean;
-    certificate_exists: boolean;
-    p12_exists: boolean;
-  }>;
+  users?: MockUser[];
+  // Returned starting from the second GET /api/users onward, to simulate
+  // membership changing out-of-band (CLI, another admin session) between the
+  // initial page load and a later re-fetch.
+  usersAfterFirstFetch?: MockUser[];
+  groups?: Array<{ name: string; config_exists: boolean; has_settings: boolean }>;
   otpRecords?: Array<{ username: string; enabled: boolean }>;
   sessions?: Array<{
     username: string;
@@ -32,13 +40,15 @@ type MockOptions = {
   domains?: string[];
   mutations?: Array<{ method: string; path: string; csrf: string | null; body: string | null }>;
   initialServerState?: "running" | "stopped";
-  routingMode?: "direct" | "full" | "split";
+  routingMode?: "full" | "split";
 };
 
 async function mockApi(page: Page, options: MockOptions = {}) {
   let authenticated = false;
   let serverState = options.initialServerState ?? "running";
+  let userFetchCount = 0;
   const users = options.users ?? [];
+  const groups = options.groups ?? [];
   const otpRecords = options.otpRecords ?? [];
   const sessions = options.sessions ?? [];
   const routes = options.routes ?? [];
@@ -80,6 +90,11 @@ async function mockApi(page: Page, options: MockOptions = {}) {
     if (path === "/api/server/stop") {
       serverState = "stopped";
     }
+    if (path === "/api/users" && method === "GET") {
+      userFetchCount += 1;
+    }
+    const currentUsers =
+      userFetchCount <= 1 || !options.usersAfterFirstFetch ? users : options.usersAfterFirstFetch;
     const serverStatus = {
       ...commandResult,
       stdout: serverState === "running" ? "ocserv RUNNING\n" : "ocserv STOPPED\n"
@@ -90,7 +105,8 @@ async function mockApi(page: Page, options: MockOptions = {}) {
       "/api/server/start": commandResult,
       "/api/server/stop": commandResult,
       "/api/server/reload": commandResult,
-      "/api/users": method === "GET" ? users : commandResult,
+      "/api/users": method === "GET" ? currentUsers : commandResult,
+      "/api/groups": groups,
       "/api/users/otp": otpRecords,
       "/api/sessions": sessions,
       "/api/routing/routes":
@@ -356,4 +372,118 @@ test("core management buttons call expected API endpoints with CSRF", async ({ p
       { method: "PUT", path: "/api/routing/routes", csrf: "csrf" }
     ])
   );
+});
+
+test("group membership dialogs fetch fresh data instead of trusting stale state", async ({
+  page
+}) => {
+  // Regression test: state.users is only ever refreshed after an action taken
+  // through this panel, so membership changed out-of-band (CLI, another admin
+  // session, or just a tab left open) used to render wrong until some
+  // unrelated reload happened to refresh it. Both membership dialogs must
+  // re-fetch /api/users at open time instead of reading the cached snapshot.
+  await mockApi(page, {
+    users: [
+      {
+        username: "alice",
+        disabled: false,
+        certificate_exists: false,
+        p12_exists: false,
+        groups: ["devops"]
+      }
+    ],
+    // Every fetch after the initial page load (i.e. the ones triggered by
+    // opening a membership dialog) says alice is no longer in "devops" --
+    // simulating a change made outside this tab.
+    usersAfterFirstFetch: [
+      { username: "alice", disabled: false, certificate_exists: false, p12_exists: false, groups: [] }
+    ],
+    groups: [{ name: "devops", config_exists: true, has_settings: true }]
+  });
+
+  await signIn(page);
+
+  await page.getByLabel("Primary").getByRole("button", { name: "Groups", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Groups", exact: true })).toBeVisible();
+  await page.getByRole("table").getByRole("button", { name: "Members" }).click();
+  await expect(page.getByRole("heading", { name: "devops members" })).toBeVisible();
+  const aliceRow = page.locator(".group-choice", { hasText: "alice" });
+  await expect(aliceRow.locator("input[type=checkbox]")).not.toBeChecked();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+
+  await page.getByRole("button", { name: "Users", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Users", exact: true })).toBeVisible();
+  await page.getByRole("table").getByRole("button", { name: "Groups" }).click();
+  await expect(page.getByRole("heading", { name: "alice groups" })).toBeVisible();
+  const devopsRow = page.locator(".group-choice", { hasText: "devops" });
+  await expect(devopsRow.locator("input[type=checkbox]")).not.toBeChecked();
+});
+
+test("creating an upstream profile sends its target routes/domains as arrays", async ({
+  page
+}) => {
+  // Regression test: the "Target routes"/"Target domains" fields (per-profile
+  // targeted routing) and the request payload's routes/domains
+  // CSV/newline-splitting were previously only covered at the unit level
+  // (api.test.ts), never through the actual profile-editor UI.
+  const mutations: MockOptions["mutations"] = [];
+  await mockApi(page, { mutations });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Create profile", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "New upstream profile" })).toBeVisible();
+
+  await page.getByLabel("Name", { exact: true }).fill("finance");
+  await page.getByLabel("Server", { exact: true }).fill("finance.example.com");
+  await page.getByLabel("Username", { exact: true }).fill("finance-user");
+  await page.getByLabel("Password", { exact: true }).fill("finance-pass");
+  await page.getByLabel("Target routes", { exact: true }).fill("10.50.0.0/16, 10.60.0.0/16");
+  await page
+    .getByLabel("Target domains", { exact: true })
+    .fill("internal.example.com\ncorp.example.com");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "New upstream profile" })).toHaveCount(0);
+  const saved = mutations.find(
+    (mutation) => mutation.method === "POST" && mutation.path === "/api/upstream/profiles"
+  );
+  expect(saved).toBeDefined();
+  const payload = JSON.parse(saved?.body ?? "{}");
+  expect(payload.name).toBe("finance");
+  expect(payload.routes).toEqual(["10.50.0.0/16", "10.60.0.0/16"]);
+  expect(payload.domains).toEqual(["internal.example.com", "corp.example.com"]);
+});
+
+test("toggling host-traffic routing sends host_traffic/host_mode to the API", async ({
+  page
+}) => {
+  const mutations: MockOptions["mutations"] = [];
+  await mockApi(page, { mutations });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  const routingPanel = page
+    .getByRole("heading", { name: "Server-side routing", exact: true })
+    .locator("../..");
+  await routingPanel.getByLabel("Host traffic", { exact: true }).check();
+  // Not getByLabel: this <select>'s computed accessible name concatenates
+  // the label text with its own currently-selected option ("Host
+  // modeFull (all host traffic)"), so an exact label match never hits.
+  await routingPanel
+    .locator("label")
+    .filter({ hasText: "Host mode" })
+    .locator("select")
+    .selectOption("split");
+  await routingPanel.getByRole("button", { name: "Save", exact: true }).click();
+
+  const saved = mutations.find(
+    (mutation) => mutation.method === "POST" && mutation.path === "/api/routing/settings"
+  );
+  expect(saved).toBeDefined();
+  const payload = JSON.parse(saved?.body ?? "{}");
+  expect(payload.host_traffic).toBe(true);
+  expect(payload.host_mode).toBe("split");
 });

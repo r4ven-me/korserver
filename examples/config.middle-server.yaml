@@ -59,7 +59,11 @@ upstream:
   profiles:
     - name: private-main
       server: private.example.com
-      port: "443/?secretWord"
+      port: "443"
+      # Only if the upstream ocserv itself has camouflage enabled; appended
+      # as "/?secret" after host:port, same as server.camouflage.secret on
+      # this server's own side. Optional -- omit for a plain upstream.
+      camouflage_secret: "${SECRET:PRIVATE_MAIN_CAMOUFLAGE_SECRET}"
       auth_type: password
       username: middle-user
       password: "${SECRET:PRIVATE_MAIN_PASSWORD}"
@@ -69,16 +73,18 @@ upstream:
 
 routing:
   mode: split
+  # The middle server's own traffic also follows the split routes/domain
+  # masks (marked in the nftables output hook), so the host reaches the
+  # private networks without connecting to its own ocserv as a client.
+  # host_mode is independent of the client-facing mode above.
+  host_traffic: true
+  host_mode: split
   main_interface: auto
   fwmark: "0x0c01"
   table_id: 1201
   nft_prefix: korserver
   split:
     tunnel_dns: true
-    # The middle server's own traffic also follows the split routes/domain
-    # masks (marked in the nftables output hook), so the host reaches the
-    # private networks without connecting to its own ocserv as a client.
-    host_traffic: true
     dnsmasq_listen: 10.10.10.1
     dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt

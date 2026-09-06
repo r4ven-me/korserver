@@ -82,13 +82,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "routing": {
         "mode": "full",
+        "host_traffic": False,
+        "host_mode": "full",
         "main_interface": "auto",
         "fwmark": "0x0c01",
         "table_id": 1201,
         "nft_prefix": "korserver",
         "split": {
             "tunnel_dns": False,
-            "host_traffic": False,
             "dnsmasq_listen": "10.10.10.1",
             "dnsmasq_port": 53,
             "routes_file": "/var/lib/korserver/routes.txt",

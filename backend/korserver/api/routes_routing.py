@@ -30,6 +30,7 @@ class RoutingSettingsRequest(BaseModel):
     mode: str
     tunnel_dns: bool = False
     host_traffic: bool = False
+    host_mode: str = "full"
     dnsmasq_listen: str | None = None
     dnsmasq_port: int | None = None
     main_interface: str | None = None
@@ -67,13 +68,17 @@ def save_routing_settings(
 ) -> dict[str, object]:
     split: dict[str, object] = {
         "tunnel_dns": payload.tunnel_dns,
-        "host_traffic": payload.host_traffic,
     }
     if payload.dnsmasq_listen is not None:
         split["dnsmasq_listen"] = payload.dnsmasq_listen
     if payload.dnsmasq_port is not None:
         split["dnsmasq_port"] = payload.dnsmasq_port
-    patch: dict[str, object] = {"mode": payload.mode, "split": split}
+    patch: dict[str, object] = {
+        "mode": payload.mode,
+        "host_traffic": payload.host_traffic,
+        "host_mode": payload.host_mode,
+        "split": split,
+    }
     if payload.main_interface is not None:
         patch["main_interface"] = payload.main_interface
     if payload.fwmark is not None:

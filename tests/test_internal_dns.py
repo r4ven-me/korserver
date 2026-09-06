@@ -241,6 +241,28 @@ def test_client_dns_uses_server_dns_when_internal_dns_disabled(tmp_path: Path) -
     assert "tunnel-all-dns" not in rendered
 
 
+def test_dns_tunnel_active_when_a_named_upstream_target_has_domains(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        {
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    {
+                        "name": "finance",
+                        "server": "finance.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "domains": ["finance-internal.corp"],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert config.dns_tunnel_active()
+
+
 def test_dnsmasq_render_includes_blocklist_and_upstreams(tmp_path: Path) -> None:
     config = _config(tmp_path, {"internal_dns": {"enabled": True}})
     rendered = DnsmasqConfigRenderer().render(config)

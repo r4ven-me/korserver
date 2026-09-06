@@ -63,13 +63,20 @@ def test_routing_settings_saves_host_traffic_flag(tmp_path: Path) -> None:
     response = client.post(
         "/api/routing/settings",
         auth=("admin", "secret"),
-        json={"mode": "split", "tunnel_dns": True, "host_traffic": True},
+        json={
+            "mode": "split",
+            "tunnel_dns": True,
+            "host_traffic": True,
+            "host_mode": "full",
+        },
     )
 
     assert response.status_code == 200
-    assert response.json()["routing"]["split"]["host_traffic"] is True
+    assert response.json()["routing"]["host_traffic"] is True
+    assert response.json()["routing"]["host_mode"] == "full"
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert saved["routing"]["split"]["host_traffic"] is True
+    assert saved["routing"]["host_traffic"] is True
+    assert saved["routing"]["host_mode"] == "full"
 
 
 def test_routing_routes_bulk_set_replaces_the_whole_list(tmp_path: Path) -> None:

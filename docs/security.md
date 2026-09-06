@@ -10,7 +10,14 @@
 - Reverse proxy mode must explicitly set `web.tls: false` and
   `web.allow_insecure_http: true`; keep that HTTP listener private. Configure
   `web.trusted_proxies` with the proxy IP/CIDR so forwarded headers are trusted
-  only from that proxy.
+  only from that proxy. `trusted_proxies` is a blanket trust setting, not scoped to
+  the admin API alone: it also governs which `X-Forwarded-For` value is trusted for
+  login rate-limiting (`api/auth.py`) and for the unauthenticated VPN-client-facing
+  `/api/client/routing` endpoint's IP-based identification. Only list a proxy that
+  strictly overwrites (never appends to or passes through) the `X-Forwarded-For`
+  header from anything it forwards, and that itself only accepts connections from
+  trusted sources -- otherwise a client able to reach that proxy could spoof another
+  VPN user's source IP or bypass the login lockout.
 - Browser authentication uses an `HttpOnly`, `SameSite=Strict`, secure cookie and
   CSRF token. Basic authentication remains available for non-browser API clients.
 - Interactive terminal access is disabled by default and has idle/session limits.

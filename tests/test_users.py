@@ -119,6 +119,20 @@ def test_user_service_writes_valid_per_user_config(tmp_path: Path) -> None:
     assert service.read_user_config("alice").no_udp is True
 
 
+@pytest.mark.parametrize("username", [".", ".."])
+def test_dot_and_dotdot_usernames_are_rejected(tmp_path: Path, username: str) -> None:
+    # Regression test: user_config_path() appends no filename suffix
+    # (unlike cert/key paths, which do), so an unsanitized "." or ".."
+    # would resolve to the per-user config directory itself or its parent
+    # -- a path-traversal boundary violation even though it was previously
+    # self-limiting (it lands on a directory, not a writable file).
+    config = _config(tmp_path)
+    service = UserService(config)
+
+    with pytest.raises(ValueError, match="letters, numbers"):
+        service.user_config_path(username)
+
+
 def test_empty_per_user_config_deletes_file(tmp_path: Path) -> None:
     config = _config(tmp_path)
     service = UserService(config)

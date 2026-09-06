@@ -109,9 +109,9 @@ Required:
 
 ## Routing
 
-Required modes:
+Required modes (only meaningful with upstream enabled -- otherwise clients always get
+plain NAT through the host):
 
-- direct;
 - full;
 - split.
 
@@ -127,20 +127,29 @@ Split mode supports:
 - dedicated route table;
 - reload without full container restart where possible.
 
+Also supported:
+
+- host-traffic routing (full/split), independent of the client-facing mode;
+- per-upstream-profile targeted routes/domains, each with its own fwmark/table/kill-switch,
+  regardless of which profile is active.
+
 ## GUI pages
 
+Top-level navigation:
+
 - Dashboard.
-- Users.
-- Certificates.
-- OTP.
+- Config, with sub-sections: System, Server, Certificates, Authentication,
+  Identity, Upstream (also covers server-side routing/split routes/domains
+  and per-profile targeted routing, formerly its own "Routing" tab),
+  Internal DNS, Web / API, Advanced -- plus a raw YAML editor with
+  validation and diff.
+- Users (create/delete, enable/disable, password, certificate/PKCS#12,
+  OTP enable/disable/QR are per-user actions here, not a separate page).
+- Groups.
 - Sessions.
-- Routing.
-- Domains.
-- Upstream profiles.
-- Config editor with validation and diff.
-- Logs.
 - Diagnostics.
-- Terminal.
+- Logs.
+- Terminal (only shown when `web.terminal_enabled` is true).
 
 ## CLI/API/GUI parity
 

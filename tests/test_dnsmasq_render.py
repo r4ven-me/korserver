@@ -123,3 +123,62 @@ def test_dnsmasq_render_includes_local_records(tmp_path: Path) -> None:
 
     assert "address=/nas.corp.local/10.11.11.5" in rendered
     assert "address=/printer/10.11.11.6" in rendered
+
+
+def test_dnsmasq_render_feeds_named_target_domains_into_their_own_set(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full"},
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    {
+                        "name": "finance",
+                        "server": "finance.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "domains": ["finance-internal.corp"],
+                    }
+                ],
+            },
+        },
+        environ={},
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+
+    assert (
+        "nftset=/finance-internal.corp/4#inet#korserver_filter#split_v4_finance,"
+        "6#inet#korserver_filter#split_v6_finance" in rendered
+    )
+    # No DNS-forwarding override -- that's specific to routing.split.tunnel_dns.
+    assert "server=/finance-internal.corp/" not in rendered
+
+
+def test_dnsmasq_render_ignores_named_target_domains_without_upstream_enabled(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full"},
+            "upstream": {
+                "enabled": False,
+                "profiles": [
+                    {
+                        "name": "finance",
+                        "server": "finance.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "domains": ["finance-internal.corp"],
+                    }
+                ],
+            },
+        },
+        environ={},
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+
+    assert "finance-internal.corp" not in rendered

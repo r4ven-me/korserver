@@ -3,12 +3,22 @@ from __future__ import annotations
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
 from korserver.config.models import AppConfig, UpstreamProfileConfig
+from korserver.services.secrets import is_secret_key
 from korserver.services.upstream import UpstreamService
+
+# cert_file_base64/key_file_base64 are base64-encoded certificate/key
+# material pasted by the admin -- their names don't match any of
+# is_secret_key()'s patterns (password/token/secret/etc.) at all, so they
+# need an explicit override alongside it. camouflage_secret DOES match
+# is_secret_key() (see services.secrets._TEXT_ONLY_NON_SECRET_KEYS for why
+# it's exempt only from the *rendered ocserv.conf directive* masking, not
+# this structured one) and needs no separate entry here.
+_ALWAYS_MASK_PROFILE_FIELDS = {"cert_file_base64", "key_file_base64"}
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -31,6 +41,7 @@ class UpstreamSettingsRequest(BaseModel):
     active_profile: str | None = None
     check_interval: int | None = None
     check_threshold: int | None = None
+    check_settle_seconds: int | None = None
     failover: bool | None = None
 
 
@@ -51,6 +62,11 @@ class UpstreamProfileRequest(BaseModel):
     server_cert_pin: str | None = None
     check_host: str | None = None
     camouflage_secret: str | None = None
+    # Route these specific CIDRs/domains through this profile specifically,
+    # regardless of which profile is active/default -- see
+    # RoutingService.list_targets().
+    routes: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
     # Per-profile: whether the watchdog should keep this profile dialed at
     # all (UpstreamProfileConfig.enabled). Distinct from `enable` below,
     # which is the *global* upstream.enabled toggle set when saving any
@@ -102,20 +118,23 @@ def save_settings(
         patch["check_interval"] = payload.check_interval
     if payload.check_threshold is not None:
         patch["check_threshold"] = payload.check_threshold
+    if payload.check_settle_seconds is not None:
+        patch["check_settle_seconds"] = payload.check_settle_seconds
     if payload.failover is not None:
         patch["failover"] = payload.failover
     loaded_config, written = apply_config_patch(request, {"upstream": patch})
+    # Reuse _safe_profile_dump() per profile instead of this endpoint's own
+    # exclude set: that set never included camouflage_secret, leaking it in
+    # plaintext here even after routes_upstream.py's other endpoints were
+    # fixed to mask it.
+    upstream_data = loaded_config.upstream.model_dump(mode="json", exclude={"profiles"})
+    upstream_data["profiles"] = [
+        _safe_profile_dump(item) for item in loaded_config.upstream.profiles
+    ]
     return {
         "status": "saved",
         "written": written,
-        "upstream": loaded_config.upstream.model_dump(
-            mode="json",
-            exclude={
-                "profiles": {
-                    "__all__": {"password", "cert_pass", "cert_file_base64", "key_file_base64"}
-                }
-            },
-        ),
+        "upstream": upstream_data,
     }
 
 
@@ -138,11 +157,17 @@ def save_profile(
     profile = UpstreamProfileConfig.model_validate(data)
     profiles = [item for item in config.upstream.profiles if item.name != profile.name]
     profiles.append(profile)
-    patch = {
+    patch: dict[str, object] = {
         "profiles": [item.model_dump(mode="json") for item in profiles],
-        "active_profile": profile.name,
         "enabled": payload.enable,
     }
+    # Only pick a default profile automatically when there isn't one yet
+    # (the very first profile ever saved). Once one is active, saving --
+    # whether creating another profile or editing an existing one to add
+    # its own routes/domains as a named target -- must never silently
+    # switch it; that's what POST /switch is for.
+    if config.upstream.active_profile is None:
+        patch["active_profile"] = profile.name
     loaded_config, written = apply_config_patch(request, {"upstream": patch})
     return {
         "status": "saved",
@@ -237,16 +262,21 @@ def _preserve_unset_file_field(
 
 
 def _safe_profile_dump(profile: UpstreamProfileConfig) -> dict[str, object]:
-    return profile.model_dump(
-        mode="json",
-        exclude={
-            "password",
-            "cert_pass",
-            "cert_file_base64",
-            "key_file_base64",
-            "camouflage_secret",
-        },
-    )
+    """Mask every write-only/secret field via the centralized is_secret_key()
+    check (password and cert_pass both match its generic pattern) instead
+    of a hand-picked exclude set, so a *future* field with a secret-like
+    name (e.g. an api_key or bind_password) is masked here automatically
+    instead of silently leaking until someone remembers to add it to a list
+    by hand. cert_file_base64/key_file_base64/camouflage_secret need an
+    explicit override on top -- see _ALWAYS_MASK_PROFILE_FIELDS above.
+    """
+    data = profile.model_dump(mode="json")
+    for key, value in data.items():
+        if value in (None, "", False):
+            continue
+        if key in _ALWAYS_MASK_PROFILE_FIELDS or is_secret_key(key):
+            data[key] = "***"
+    return data
 
 
 @router.post("/connect")

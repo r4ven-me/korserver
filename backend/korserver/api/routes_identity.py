@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
 from korserver.config.models import AppConfig, GroupPolicyConfig, OidcProviderConfig
+from korserver.services.secrets import is_secret_key
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -155,12 +156,22 @@ def delete_group_policy(request: Request, name: str) -> dict[str, object]:
     return {"status": "deleted", "written": written, "identity": _identity_dump(loaded_config)}
 
 
+def _mask_provider(provider: OidcProviderConfig) -> dict[str, object]:
+    """Mask secret fields via the centralized is_secret_key() check
+    (matches client_secret) instead of a hand-picked exclude set, so a
+    future secret-like field on this model is covered automatically."""
+    data = provider.model_dump(mode="json")
+    for key, value in data.items():
+        if value not in (None, "", False) and is_secret_key(key):
+            data[key] = "***"
+    return data
+
+
 def _identity_dump(config: AppConfig) -> dict[str, object]:
     return {
         "auth": config.auth.oidc.model_dump(mode="json"),
         "oidc_providers": [
-            provider.model_dump(mode="json", exclude={"client_secret"})
-            for provider in config.identity.oidc_providers
+            _mask_provider(provider) for provider in config.identity.oidc_providers
         ],
         "group_policies": [
             group.model_dump(mode="json") for group in config.identity.group_policies

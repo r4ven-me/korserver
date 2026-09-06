@@ -3,9 +3,30 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 from korserver.config.models import AppConfig
 from korserver.services.groups import GroupConfigService
 from korserver.services.users import UserConfig, UserService
+
+
+@pytest.mark.parametrize("name", [".", ".."])
+def test_dot_and_dotdot_group_names_are_rejected(tmp_path: Path, name: str) -> None:
+    # Regression test: group_config_path() appends no filename suffix, so an
+    # unsanitized "." or ".." would resolve to the per-group config
+    # directory itself or its parent -- see the analogous UserService test.
+    config = AppConfig.model_validate(
+        {
+            "system": {
+                "data_dir": tmp_path / "data",
+                "generated_dir": tmp_path / "generated",
+                "secrets_dir": tmp_path / "secrets",
+            },
+        }
+    )
+
+    with pytest.raises(ValueError, match="letters, numbers"):
+        GroupConfigService(config).group_config_path(name)
 
 
 def test_group_config_service_writes_config_per_group(tmp_path: Path) -> None:

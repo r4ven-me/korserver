@@ -22,17 +22,30 @@ class PolicyRoutingService:
     upstream interface.
     """
 
-    def __init__(self, config: AppConfig, runner: CommandRunner | None = None) -> None:
+    def __init__(
+        self,
+        config: AppConfig,
+        runner: CommandRunner | None = None,
+        *,
+        fwmark: str | None = None,
+        table_id: int | None = None,
+    ) -> None:
+        """fwmark/table_id default to the top-level routing.fwmark/table_id
+        (the default target). Pass a named target's own auto-derived values
+        (see RoutingService.list_targets()) to manage its table instead --
+        each target gets its own independent instance."""
         self.config = config
         self.runner = runner or CommandRunner()
+        self._fwmark = config.routing.fwmark if fwmark is None else fwmark
+        self._table_id = config.routing.table_id if table_id is None else table_id
 
     @property
     def table(self) -> str:
-        return str(self.config.routing.table_id)
+        return str(self._table_id)
 
     @property
     def fwmark(self) -> str:
-        return self.config.routing.fwmark
+        return self._fwmark
 
     def apply(self, interface: str | None = None, *, dry_run: bool = False) -> list[CommandResult]:
         """Point the fwmark table's default route at `interface`.
@@ -41,8 +54,6 @@ class PolicyRoutingService:
         device; falling back to the top-level upstream.interface keeps
         standalone `korctl nft`-style invocations working.
         """
-        if self.config.routing.mode not in ("full", "split"):
-            return self.cleanup(dry_run=dry_run)
         device = interface or self.config.upstream.interface
         return [
             *self._delete_rule(dry_run=dry_run),
@@ -71,8 +82,6 @@ class PolicyRoutingService:
         openconnect's own reconnect) -- after that the connection looks
         healthy while the fwmark table stays empty forever.
         """
-        if self.config.routing.mode not in ("full", "split"):
-            return []
         device = interface or self.config.upstream.interface
         results: list[CommandResult] = []
         if not self._rule_present():

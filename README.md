@@ -69,7 +69,7 @@ docker compose up -d
 scheme, not just a performance tweak for special cases. The container uses the host's
 network interfaces directly instead of Docker's bridge/NAT, which removes an extra
 `docker-proxy` hop for VPN client traffic and lets the host itself participate in split
-routing (`routing.split.host_traffic`) and use the built-in `dnsmasq` as its own
+routing (`routing.host_traffic`) and use the built-in `dnsmasq` as its own
 resolver - neither is possible under the default bridge network, since host packets
 never traverse the container's netfilter there. Two things worth knowing: `nft` rules
 are applied directly to the host's netfilter in this mode (not an isolated namespace),
@@ -442,14 +442,15 @@ upstream:
       check_host: 10.12.12.1
 
 routing:
-  mode: split # direct | full | split
+  mode: split # full | split
+  host_traffic: false
+  host_mode: full # full | split -- independent of the client-facing mode above
   main_interface: auto
   fwmark: "0x0c01"
   table_id: 1201
   nft_prefix: korserver
   split:
     tunnel_dns: true
-    host_traffic: false
     dnsmasq_listen: 10.10.10.1
     dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt
@@ -896,19 +897,20 @@ Mode" below); the modes decide which of these actually happens. In the web panel
 settings live under the "Upstream" tab (not a tab of their own), because they only mean
 anything together.
 
+Both modes are only about routing traffic into an *upstream* tunnel, so without one
+they're inert: with `upstream.enabled: false`, VPN clients always get plain NAT through
+the host (`main_interface`, or any interface if `main_interface: auto`) no matter which
+mode is set - there's nothing for a mode to route into otherwise. Mode only starts
+mattering once you actually enable upstream.
+
 Modes:
 
-- `direct` - Korvus Server doesn't manage any NAT/forwarding rules at all;
-- `full` - all VPN client traffic is marked and forced through the upstream interface
-  via a dedicated policy-routing table; if upstream is enabled but unreachable, that
-  traffic is blocked by a firewall rule (kill-switch) instead of leaking out directly
-  from the host;
+- `full` (the default) - all VPN client traffic is marked and forced through the
+  upstream interface via a dedicated policy-routing table; if upstream is enabled but
+  unreachable, that traffic is blocked by a firewall rule (kill-switch) instead of
+  leaking out directly from the host;
 - `split` - only the routes/domains listed below are forced the same way; everything
   else is NAT'd through the host as usual.
-
-Without an active upstream (`upstream.enabled: false`), `full`/`split` simply NAT the
-VPN subnet through `main_interface` (or any interface, if `main_interface: auto`) - no
-kill-switch, just plain masquerading.
 
 Example split config:
 
@@ -1101,8 +1103,7 @@ through the upstream interface via a dedicated policy-routing table
 (`routing.fwmark`/`routing.table_id`) and turns on the kill-switch: if upstream is
 unreachable, that traffic won't go out directly from the host, it will be blocked by a
 firewall rule instead of leaking past the tunnel. `mode: full` does the same thing but
-for all client traffic; `mode: direct` disables this logic entirely. Several profiles
-can be connected **at the same time**: each has its own tunnel interface
+for all client traffic. Several profiles can be connected **at the same time**: each has its own tunnel interface
 (`profiles[].interface`; without one, the first profile inherits `upstream.interface`,
 the next ones get `oc-up<N>`) and its own pid file. Exactly one is always active - the
 redirection rules (nftables oifname + policy route) point at its tunnel. Switching the
@@ -1123,6 +1124,28 @@ without dialing. `upstream.check_settle_seconds` is a grace window after a succe
 reconnect during which health-check failures aren't counted yet, so a tunnel that just
 came back up (routing/DPD still settling) can't immediately trigger another reconnect
 before it had a chance to prove itself.
+
+Any profile can also carry its own `routes`/`domains` (CIDRs / domain names) in
+addition to the ones above - this targets that traffic through this specific profile's
+tunnel regardless of which profile is currently active/default, each with its own
+fwmark/table/kill-switch and nftables set, derived automatically from
+`routing.fwmark`/`table_id`. This is separate from `routing.mode`/`routing.split`, which
+only shape the *default* profile's traffic:
+
+```yaml
+upstream:
+  enabled: true
+  profiles:
+    - name: private-main
+      server: vpn.internal.example.com
+      routes:
+        - 10.50.0.0/16
+      domains:
+        - internal.example.com
+```
+
+Set from the Upstream tab's profile editor ("Target routes"/"Target domains" fields) or
+directly in `config.yaml`.
 
 Middle-server routing, reconnect/failover and end-to-end access to the private network
 still depend on the real network, the upstream server, and nftables/policy-routing on
@@ -1223,6 +1246,16 @@ with `network_mode: host` too (or natively on the host, outside Docker entirely)
 Uvicorn will then only accept `X-Forwarded-For` and `X-Forwarded-Proto` from the trusted
 proxy source. Don't widen `trusted_proxies` beyond what you actually need.
 
+`trusted_proxies` is not scoped to just the admin panel: the same trusted
+`X-Forwarded-For` value is also what login rate-limiting keys on, and what the
+unauthenticated, VPN-client-facing `/api/client/routing` endpoint uses to identify
+which connected client is asking for its own routes/split-DNS domains. Only list a
+proxy that strictly *overwrites* `X-Forwarded-For` on anything it forwards (never one
+that appends to or passes through a value it received from someone else), and that
+itself only accepts connections from sources you trust - otherwise a client able to
+reach that proxy could spoof another VPN user's source IP (reading their routes) or
+reset their own login-lockout counter at will.
+
 Keep `session_cookie_secure` enabled behind an HTTPS reverse proxy too. Only disable it
 for isolated local HTTP development.
 
@@ -1263,7 +1296,7 @@ CLI:
 - Sessions: list of active sessions via `occtl` and kicking a user;
 - Upstream (includes the former separate Routing tab): status, list/create/edit/delete
   profiles, switch active profile, connect/disconnect, check host + auto-reconnect/
-  failover settings; server-side routing mode (direct/full/split) with kill-switch,
+  failover settings; server-side routing mode (full/split) with kill-switch,
   routes/domains/split IPs add/delete, reload, nft show/apply/cleanup;
 - Config: edit the persistent `/etc/korserver/config.yaml`, validate YAML, save with an
   atomic write, rendered files, diff and write rendered files;

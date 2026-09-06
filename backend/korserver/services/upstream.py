@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import base64
+import contextlib
+import fcntl
 import json
 import os
 import re
 import signal
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -53,9 +56,86 @@ class UpstreamService:
         self.policy_routing = policy_routing or PolicyRoutingService(config, runner=self.runner)
         self.active_profile_file = config.system.generated_dir / "active-upstream"
         self.log_file = config.system.log_dir / "upstream.log"
+        self._lock_path = config.system.generated_dir / ".upstream.lock"
+        self._lock_fd: int | None = None
+        self._lock_depth = 0
+
+    @contextlib.contextmanager
+    def _locked(self) -> Iterator[None]:
+        """Serialize every operation that mutates nftables/policy-routing/
+        active-profile state, across processes.
+
+        `korctl upstream watch` (the watchdog) runs as its own long-lived
+        process calling ensure_policy_routing()/enforce_profile_enablement()/
+        recover() on a timer, fully independent of the FastAPI worker
+        process handling switch_profile()/connect()/disconnect() via the
+        admin API or CLI. Without a lock, a manual switch_profile() (a full
+        nftables reload + policy-route apply) can interleave with a
+        concurrent watchdog tick reading a now-stale selected_profile() and
+        re-asserting a route to the OLD interface right after the switch --
+        misrouting marked traffic until the next tick.
+
+        fcntl.flock on a fixed file serializes this across processes.
+        Reentrant *within one instance* via a depth counter and one
+        persistent fd, so a method that calls another locking method on
+        `self` (e.g. enforce_profile_enablement() calling self.connect())
+        doesn't self-deadlock -- re-flocking the SAME fd is a no-op, but two
+        independently-opened fds from the same process are treated as
+        unrelated locks by flock(2) and would deadlock against each other.
+        """
+        if self._lock_depth == 0:
+            if self._lock_fd is None:
+                self.files.ensure_dir(self._lock_path.parent)
+                self._lock_fd = os.open(self._lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+            fcntl.flock(self._lock_fd, fcntl.LOCK_EX)
+        self._lock_depth += 1
+        try:
+            yield
+        finally:
+            self._lock_depth -= 1
+            if self._lock_depth == 0 and self._lock_fd is not None:
+                fcntl.flock(self._lock_fd, fcntl.LOCK_UN)
 
     def list_profiles(self) -> list[UpstreamProfileConfig]:
         return self.config.upstream.profiles
+
+    def _named_target_routing(
+        self,
+    ) -> list[tuple[UpstreamProfileConfig, PolicyRoutingService]]:
+        """Every profile with its own routes/domains assigned, paired with a
+        PolicyRoutingService for its auto-derived fwmark/table (see
+        RoutingService.list_targets()). Independent of which profile is
+        active/selected -- a named target's traffic always follows its own
+        assigned profile. Empty when upstream is disabled: named targets
+        don't exist at all then, same as the rendered nftables rules."""
+        if not self.config.upstream.enabled:
+            return []
+        from korserver.services.routing import RoutingService
+
+        targets_by_name = {
+            target.name: target
+            for target in RoutingService(self.config).list_targets(
+                default_interface=self.config.routing.main_interface
+            )
+            if target.name != "default"
+        }
+        result: list[tuple[UpstreamProfileConfig, PolicyRoutingService]] = []
+        for profile in self.config.upstream.profiles:
+            target = targets_by_name.get(profile.name)
+            if target is None:
+                continue
+            result.append(
+                (
+                    profile,
+                    PolicyRoutingService(
+                        self.config,
+                        runner=self.runner,
+                        fwmark=target.fwmark,
+                        table_id=target.table_id,
+                    ),
+                )
+            )
+        return result
 
     def selected_profile(self) -> UpstreamProfileConfig | None:
         """The runtime-switched active profile (active_profile_file), or
@@ -208,8 +288,8 @@ class UpstreamService:
         rather than a reconnect.
         """
         profile = self._profile_by_name(name)
-        self.files.atomic_write_text(self.active_profile_file, f"{name}\n", mode=0o600)
-        if self.config.routing.mode != "direct":
+        with self._locked():
+            self.files.atomic_write_text(self.active_profile_file, f"{name}\n", mode=0o600)
             interface = self.profile_interface(profile)
             self.nftables.apply(outbound_interface=interface)
             if self._profile_connected(profile):
@@ -252,13 +332,13 @@ class UpstreamService:
             "--background",
             f"--pid-file={self._pid_file(profile)}",
         ]
-        if self.config.routing.mode in ("full", "split"):
-            # In full/split the fwmark policy routing owns all tunnel egress;
-            # the distribution vpnc-script would additionally apply whatever
-            # the upstream pushes (default route, split routes, resolv.conf)
-            # to this namespace -- on network_mode: host that hijacks the
-            # host itself. Use the minimal interface-only script instead.
-            argv.append(f"--script={self._ensure_vpnc_script()}")
+        # The fwmark policy routing always owns tunnel egress now (no more
+        # hands-off "direct" mode); the distribution vpnc-script would
+        # additionally apply whatever the upstream pushes (default route,
+        # split routes, resolv.conf) to this namespace -- on
+        # network_mode: host that hijacks the host itself. Use the minimal
+        # interface-only script instead.
+        argv.append(f"--script={self._ensure_vpnc_script()}")
         if profile.trusted_cert:
             argv.append("--no-cert-check")
         if profile.server_cert_pin:
@@ -342,45 +422,55 @@ class UpstreamService:
         profile = self._profile_by_name(name) if name else self.selected_profile()
         if profile is None:
             raise ValueError("no upstream profile configured")
-        if not dry_run and self._profile_connected(profile):
-            # Idempotent, mirroring disconnect's "not connected" no-op: the
-            # watchdog auto-connects in the background, so a manual Connect
-            # click can legitimately race an already-established tunnel --
-            # that's a state to report, not an error to scare with.
-            return CommandResult(
-                argv=("openconnect", "<already-running>"),
-                returncode=0,
-                stdout=f"profile '{profile.name}' is already connected",
-                stderr="",
-            )
-        selected = self.selected_profile()
-        is_active = selected is not None and selected.name == profile.name
-        if not dry_run:
-            self._repair_stale_resolv_conf()
-            if self.config.routing.mode != "direct":
+        with self._locked():
+            if not dry_run and self._profile_connected(profile):
+                # Idempotent, mirroring disconnect's "not connected" no-op:
+                # the watchdog auto-connects in the background, so a manual
+                # Connect click can legitimately race an already-established
+                # tunnel -- that's a state to report, not an error to scare
+                # with.
+                return CommandResult(
+                    argv=("openconnect", "<already-running>"),
+                    returncode=0,
+                    stdout=f"profile '{profile.name}' is already connected",
+                    stderr="",
+                )
+            selected = self.selected_profile()
+            is_active = selected is not None and selected.name == profile.name
+            if not dry_run:
+                self._repair_stale_resolv_conf()
                 # Load the split/full-mode kill-switch rules before dialing,
                 # so marked traffic is blocked from the very first moment
                 # rather than briefly leaking out unencrypted while
                 # connecting. Rules always point at the ACTIVE profile's
                 # interface, even when dialing a standby.
                 self.nftables.apply(outbound_interface=self.active_interface())
-        result = self.runner.run(
-            self.openconnect_argv(profile),
-            input_text=f"{profile.password}\n" if profile.password else None,
-            timeout=60,
-            graceful_timeout=5,
-            dry_run=dry_run,
-            output_file=self.log_file,
-            extra_secrets=[profile.password or "", profile.cert_pass or "", profile.port],
-        )
-        if not dry_run:
-            self._verify_backgrounded(profile, result)
-        if not dry_run and is_active:
-            # A failed connect already raised CommandError above, so
-            # reaching here means the tunnel is up and the interface
-            # actually exists -- only now can a route via it be installed.
-            self.policy_routing.apply(self.profile_interface(profile))
-        return result
+            result = self.runner.run(
+                self.openconnect_argv(profile),
+                input_text=f"{profile.password}\n" if profile.password else None,
+                timeout=60,
+                graceful_timeout=5,
+                dry_run=dry_run,
+                output_file=self.log_file,
+                extra_secrets=[profile.password or "", profile.cert_pass or "", profile.port],
+            )
+            if not dry_run:
+                self._verify_backgrounded(profile, result)
+            if not dry_run and is_active:
+                # A failed connect already raised CommandError above, so
+                # reaching here means the tunnel is up and the interface
+                # actually exists -- only now can a route via it be
+                # installed.
+                self.policy_routing.apply(self.profile_interface(profile))
+            if not dry_run:
+                # A connected profile that's also a named target gets its
+                # own table pointed at its own interface, regardless of
+                # whether it's the active one -- its assigned traffic
+                # doesn't care which profile is "active".
+                for target_profile, routing in self._named_target_routing():
+                    if target_profile.name == profile.name:
+                        routing.apply(self.profile_interface(profile))
+            return result
 
     def _verify_backgrounded(self, profile: UpstreamProfileConfig, result: CommandResult) -> None:
         """Confirm the daemonized openconnect is still alive after --background.
@@ -432,35 +522,39 @@ class UpstreamService:
         repairs on the next connect.
         """
         profile = self._profile_by_name(name) if name else self.selected_profile()
-        pid = self._read_pid(profile) if profile is not None else None
-        if profile is None or pid is None or not self._is_running(pid):
-            return CommandResult(
-                argv=("kill", "-TERM", "<upstream-pid>"),
-                returncode=0,
-                stdout="not connected",
-                stderr="",
-                dry_run=dry_run,
-            )
-        argv = ("kill", "-TERM", str(pid))
-        if dry_run:
-            return CommandResult(argv=argv, returncode=0, stdout="", stderr="", dry_run=True)
-        self._append_log(f"--- disconnect '{profile.name}' requested (pid {pid}) ---")
-        os.kill(pid, signal.SIGTERM)
-        deadline = time.monotonic() + DISCONNECT_GRACE_SECONDS
-        while time.monotonic() < deadline and self._is_running(pid):
-            time.sleep(0.2)
-        if self._is_running(pid):
-            self._append_log(
-                f"pid {pid} did not exit within {DISCONNECT_GRACE_SECONDS}s, sending SIGKILL"
-            )
-            os.kill(pid, signal.SIGKILL)
-        selected = self.selected_profile()
-        if selected is not None and selected.name == profile.name:
-            # Only the active profile's tunnel carries the policy route;
-            # dropping a standby connection must not touch routing.
-            self.policy_routing.cleanup()
-        self._append_log(f"'{profile.name}' disconnected")
-        return CommandResult(argv=argv, returncode=0, stdout="disconnected", stderr="")
+        with self._locked():
+            pid = self._read_pid(profile) if profile is not None else None
+            if profile is None or pid is None or not self._is_running(pid):
+                return CommandResult(
+                    argv=("kill", "-TERM", "<upstream-pid>"),
+                    returncode=0,
+                    stdout="not connected",
+                    stderr="",
+                    dry_run=dry_run,
+                )
+            argv = ("kill", "-TERM", str(pid))
+            if dry_run:
+                return CommandResult(argv=argv, returncode=0, stdout="", stderr="", dry_run=True)
+            self._append_log(f"--- disconnect '{profile.name}' requested (pid {pid}) ---")
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + DISCONNECT_GRACE_SECONDS
+            while time.monotonic() < deadline and self._is_running(pid):
+                time.sleep(0.2)
+            if self._is_running(pid):
+                self._append_log(
+                    f"pid {pid} did not exit within {DISCONNECT_GRACE_SECONDS}s, sending SIGKILL"
+                )
+                os.kill(pid, signal.SIGKILL)
+            selected = self.selected_profile()
+            if selected is not None and selected.name == profile.name:
+                # Only the active profile's tunnel carries the policy route;
+                # dropping a standby connection must not touch routing.
+                self.policy_routing.cleanup()
+            for target_profile, routing in self._named_target_routing():
+                if target_profile.name == profile.name:
+                    routing.cleanup()
+            self._append_log(f"'{profile.name}' disconnected")
+            return CommandResult(argv=argv, returncode=0, stdout="disconnected", stderr="")
 
     def healthcheck(self, *, dry_run: bool = False) -> CommandResult | None:
         profile = self.selected_profile()
@@ -505,7 +599,8 @@ class UpstreamService:
         return result is None or result.ok
 
     def ensure_policy_routing(self) -> list[CommandResult]:
-        """Re-assert the fwmark rule/route for the active connected profile.
+        """Re-assert the fwmark rule/route for the active connected profile,
+        and for every connected named-target profile.
 
         Run by the watchdog on every healthy tick: the kernel purges every
         route referencing the tunnel device whenever it bounces (openconnect
@@ -513,12 +608,15 @@ class UpstreamService:
         'connected' upstream whose fwmark table is empty -- marked traffic
         then dies in the kill-switch until something re-installs the route.
         """
-        if self.config.routing.mode == "direct":
-            return []
-        profile = self.selected_profile()
-        if profile is None or not self._profile_connected(profile):
-            return []
-        return self.policy_routing.ensure(self.profile_interface(profile))
+        with self._locked():
+            results: list[CommandResult] = []
+            profile = self.selected_profile()
+            if profile is not None and self._profile_connected(profile):
+                results.extend(self.policy_routing.ensure(self.profile_interface(profile)))
+            for target_profile, routing in self._named_target_routing():
+                if self._profile_connected(target_profile):
+                    results.extend(routing.ensure(self.profile_interface(target_profile)))
+            return results
 
     def enforce_profile_enablement(self) -> list[CommandResult]:
         """Bring every profile's connection up to date with its own
@@ -540,22 +638,23 @@ class UpstreamService:
         profile as active, so it naturally falls out of "active" here too
         and gets torn down like any other disabled profile.
         """
-        selected = self.selected_profile()
-        active_name = selected.name if selected else None
-        results: list[CommandResult] = []
-        for profile in self.config.upstream.profiles:
-            connected = self._profile_connected(profile)
-            if not profile.enabled:
-                if connected:
-                    results.append(self.disconnect(profile.name))
-                continue
-            if profile.name == active_name or connected:
-                continue
-            try:
-                results.append(self.connect(profile.name))
-            except (ValueError, CommandError):
-                self._append_log(f"standby connect to '{profile.name}' failed")
-        return results
+        with self._locked():
+            selected = self.selected_profile()
+            active_name = selected.name if selected else None
+            results: list[CommandResult] = []
+            for profile in self.config.upstream.profiles:
+                connected = self._profile_connected(profile)
+                if not profile.enabled:
+                    if connected:
+                        results.append(self.disconnect(profile.name))
+                    continue
+                if profile.name == active_name or connected:
+                    continue
+                try:
+                    results.append(self.connect(profile.name))
+                except (ValueError, CommandError):
+                    self._append_log(f"standby connect to '{profile.name}' failed")
+            return results
 
     def recover(self) -> bool:
         """Restore upstream connectivity after health-check failures.
@@ -566,62 +665,66 @@ class UpstreamService:
         that -- and a standby whose tunnel is already up is adopted by
         just switching the redirection rules to it, no dialing.
         """
-        profiles = self.config.upstream.profiles
-        if not profiles:
-            return False
-        # Only ever consider enabled profiles here: selected_profile() already
-        # refuses to report a disabled profile as active (see its docstring),
-        # so falling back to profiles[0] without the same filter could pick a
-        # disabled one right back up -- connect() doesn't itself check
-        # `enabled`, so it would dial successfully, and the next
-        # enforce_profile_enablement() tick would immediately tear it back
-        # down again, live-locking recover() against its own watchdog.
-        names = [profile.name for profile in profiles if profile.enabled]
-        if not names:
-            self._append_log("no enabled upstream profile to recover")
-            return False
-        active = self.selected_profile()
-        # Track separately from current_name: when there's no genuinely
-        # active profile (active is None -- e.g. the one on record was
-        # disabled), current_name falls back to names[0] as a search
-        # starting point only. That fallback was never actually granted the
-        # redirection rules, so it must still go through switch_profile()
-        # below like any other failover target -- treating it as "already
-        # active" purely because its name matches the fallback would leave
-        # a connected-but-not-redirected tunnel.
-        already_active = active is not None
-        current_name = active.name if active else names[0]
-        if self.config.upstream.failover and len(names) > 1:
-            start = names.index(current_name) if current_name in names else 0
-            order = [names[(start + offset) % len(names)] for offset in range(len(names))]
-        else:
-            order = [current_name]
-
-        for name in order:
-            profile = self._profile_by_name(name)
-            is_current_and_active = name == current_name and already_active
-            if is_current_and_active:
-                # The active connection is the one that failed its checks:
-                # a live-but-unhealthy process must be torn down before
-                # redialing, and a dead one leaves nothing to keep.
-                if self._profile_connected(profile):
-                    self.disconnect(name)
-                try:
-                    self.connect(name)
-                except (ValueError, CommandError):
-                    self._append_log(f"reconnect attempt to '{name}' failed")
-                    continue
-            elif not self._profile_connected(profile):
-                try:
-                    self.connect(name)
-                except (ValueError, CommandError):
-                    self._append_log(f"failover connect to '{name}' failed")
-                    continue
-            if is_current_and_active:
-                self._append_log(f"reconnected to '{name}'")
+        with self._locked():
+            profiles = self.config.upstream.profiles
+            if not profiles:
+                return False
+            # Only ever consider enabled profiles here: selected_profile()
+            # already refuses to report a disabled profile as active (see
+            # its docstring), so falling back to profiles[0] without the
+            # same filter could pick a disabled one right back up --
+            # connect() doesn't itself check `enabled`, so it would dial
+            # successfully, and the next enforce_profile_enablement() tick
+            # would immediately tear it back down again, live-locking
+            # recover() against its own watchdog.
+            names = [profile.name for profile in profiles if profile.enabled]
+            if not names:
+                self._append_log("no enabled upstream profile to recover")
+                return False
+            active = self.selected_profile()
+            # Track separately from current_name: when there's no genuinely
+            # active profile (active is None -- e.g. the one on record was
+            # disabled), current_name falls back to names[0] as a search
+            # starting point only. That fallback was never actually granted
+            # the redirection rules, so it must still go through
+            # switch_profile() below like any other failover target --
+            # treating it as "already active" purely because its name
+            # matches the fallback would leave a connected-but-not-
+            # redirected tunnel.
+            already_active = active is not None
+            current_name = active.name if active else names[0]
+            if self.config.upstream.failover and len(names) > 1:
+                start = names.index(current_name) if current_name in names else 0
+                order = [names[(start + offset) % len(names)] for offset in range(len(names))]
             else:
-                self.switch_profile(name)
-                self._append_log(f"failed over to '{name}' (redirection rules switched)")
-            return True
-        self._append_log("all reconnect attempts failed")
-        return False
+                order = [current_name]
+
+            for name in order:
+                profile = self._profile_by_name(name)
+                is_current_and_active = name == current_name and already_active
+                if is_current_and_active:
+                    # The active connection is the one that failed its
+                    # checks: a live-but-unhealthy process must be torn down
+                    # before redialing, and a dead one leaves nothing to
+                    # keep.
+                    if self._profile_connected(profile):
+                        self.disconnect(name)
+                    try:
+                        self.connect(name)
+                    except (ValueError, CommandError):
+                        self._append_log(f"reconnect attempt to '{name}' failed")
+                        continue
+                elif not self._profile_connected(profile):
+                    try:
+                        self.connect(name)
+                    except (ValueError, CommandError):
+                        self._append_log(f"failover connect to '{name}' failed")
+                        continue
+                if is_current_and_active:
+                    self._append_log(f"reconnected to '{name}'")
+                else:
+                    self.switch_profile(name)
+                    self._append_log(f"failed over to '{name}' (redirection rules switched)")
+                return True
+            self._append_log("all reconnect attempts failed")
+            return False

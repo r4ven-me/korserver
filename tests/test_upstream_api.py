@@ -50,6 +50,57 @@ def test_upstream_settings_saves_failover_fields(tmp_path: Path) -> None:
     assert saved["upstream"]["failover"] is True
 
 
+def test_upstream_settings_saves_check_settle_seconds(tmp_path: Path) -> None:
+    # check_settle_seconds previously had no GUI/API control at all -- an
+    # admin could only change it by hand-editing the raw YAML tab, per
+    # AGENTS.md's "every AppConfig field needs a structured control" rule.
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/settings",
+        auth=("admin", "secret"),
+        json={"enabled": False, "check_settle_seconds": 30},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["upstream"]["check_settle_seconds"] == 30
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["check_settle_seconds"] == 30
+
+
+def test_upstream_settings_response_masks_profile_camouflage_secret(tmp_path: Path) -> None:
+    # Regression test: this endpoint's response used its own separate
+    # exclude set (password/cert_pass/cert_file_base64/key_file_base64)
+    # that never included camouflage_secret, leaking it in plaintext here
+    # even after the other /api/upstream/* endpoints were fixed.
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "primary",
+            "server": "vpn.upstream.example.com",
+            "auth_type": "password",
+            "username": "user",
+            "password": "pw",
+            "camouflage_secret": "camo-secret",
+        },
+    )
+
+    response = client.post(
+        "/api/upstream/settings",
+        auth=("admin", "secret"),
+        json={"enabled": True, "check_interval": 10},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "camo-secret" not in str(payload)
+    assert payload["upstream"]["profiles"][0]["camouflage_secret"] == "***"
+
+
 def test_upstream_profile_saves_cert_pass_but_never_returns_it(tmp_path: Path) -> None:
     config_path = tmp_path / "config.yaml"
     client = _client(config_path, tmp_path)
@@ -134,6 +185,34 @@ def test_upstream_profile_saves_camouflage_secret_but_never_returns_it(tmp_path:
     assert "camo-secret" not in str(payload)
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert saved["upstream"]["profiles"][0]["camouflage_secret"] == "camo-secret"
+
+
+def test_upstream_profile_response_masks_base64_cert_and_key_material(tmp_path: Path) -> None:
+    # cert_file_base64/key_file_base64 don't match is_secret_key()'s generic
+    # name pattern (password/token/secret/etc.) at all, so _safe_profile_dump()
+    # needs an explicit override for them alongside the generic check.
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "primary",
+            "server": "vpn.upstream.example.com",
+            "auth_type": "p12",
+            "cert_file_base64": "aGVsbG8=",
+            "key_file_base64": "d29ybGQ=",
+        },
+    )
+
+    assert response.status_code == 200
+    profile = response.json()["profiles"][0]
+    assert profile["cert_file_base64"] == "***"
+    assert profile["key_file_base64"] == "***"
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["profiles"][0]["cert_file_base64"] == "aGVsbG8="
+    assert saved["upstream"]["profiles"][0]["key_file_base64"] == "d29ybGQ="
 
 
 def test_upstream_profile_edit_without_camouflage_secret_preserves_it(tmp_path: Path) -> None:
@@ -409,3 +488,74 @@ def test_upstream_status_includes_connections_list(tmp_path: Path) -> None:
     assert payload["local_ip"] is None
     assert payload["connections"][0]["profile"] == "primary"
     assert payload["connections"][0]["connected"] is False
+
+
+def test_upstream_profile_saves_routes_and_domains(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "finance",
+            "server": "finance.example.com",
+            "auth_type": "password",
+            "username": "user",
+            "routes": ["10.50.0.0/16"],
+            "domains": ["finance-internal.corp"],
+        },
+    )
+
+    assert response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["profiles"][0]["routes"] == ["10.50.0.0/16"]
+    assert saved["upstream"]["profiles"][0]["domains"] == ["finance-internal.corp"]
+
+
+def test_editing_an_existing_profile_does_not_change_the_active_one(tmp_path: Path) -> None:
+    # Regression test: adding routes/domains to a profile (making it a named
+    # target) is unrelated to which profile is active/default -- saving the
+    # edit form for it must not silently steer active_profile away from
+    # whatever the admin already had selected.
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "primary",
+            "server": "vpn.example.com",
+            "auth_type": "password",
+            "username": "u",
+        },
+    )
+    client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "finance",
+            "server": "finance.example.com",
+            "auth_type": "password",
+            "username": "u",
+        },
+    )
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["active_profile"] == "primary"
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "finance",
+            "server": "finance.example.com",
+            "auth_type": "password",
+            "username": "u",
+            "routes": ["10.50.0.0/16"],
+        },
+    )
+
+    assert response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["active_profile"] == "primary"
+    assert saved["upstream"]["profiles"][1]["routes"] == ["10.50.0.0/16"]

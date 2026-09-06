@@ -35,7 +35,6 @@ auth:
     ocserv_oath_auth: false
 
 routing:
-  mode: direct
   main_interface: auto
 
 upstream:

@@ -52,6 +52,32 @@ class RecordingRunner(CommandRunner):
         return CommandResult(tuple(argv), 0, "", "", dry_run=dry_run)
 
 
+class WritingRunner(CommandRunner):
+    """Unlike RecordingRunner, actually creates the file named after
+    --outfile -- needed to exercise chmod-after-write behavior, since chmod
+    on a path certtool never actually created would raise FileNotFoundError."""
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: int = 30,
+        cwd: str | None = None,
+        input_text: str | None = None,
+        env: Mapping[str, str] | None = None,
+        check: bool = True,
+        dry_run: bool = False,
+        extra_secrets: Sequence[str] | None = None,
+    ) -> CommandResult:
+        del timeout, cwd, input_text, env, check, extra_secrets
+        argv = list(argv)
+        if not dry_run and "--outfile" in argv:
+            out_path = Path(argv[argv.index("--outfile") + 1])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("placeholder", encoding="utf-8")
+        return CommandResult(tuple(argv), 0, "", "", dry_run=dry_run)
+
+
 def _config(tmp_path: Path) -> AppConfig:
     return AppConfig.model_validate(
         {
@@ -136,6 +162,42 @@ def test_server_certificate_template_contains_dns_san(tmp_path: Path) -> None:
     assert "dns_name = vpn.example.com" in template
 
 
+def test_init_ca_chmods_the_private_key_to_owner_only(tmp_path: Path) -> None:
+    # Regression test: certtool writes the key file with whatever the
+    # process's ambient umask allows (world-readable under a common 022
+    # umask) -- protection previously relied entirely on cert_dir's own
+    # 0o700 mode, with no defense-in-depth at the individual file level.
+    config = _config(tmp_path)
+    service = CertificateService(config, runner=WritingRunner())
+
+    service.init_ca()
+
+    mode = config.cert_path("ca.key").stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_create_user_certificate_chmods_the_private_key_to_owner_only(
+    tmp_path: Path,
+) -> None:
+    config = _config(tmp_path)
+    service = CertificateService(config, runner=WritingRunner())
+
+    service.create_user_certificate("alice")
+
+    mode = (config.system.data_dir / "certs" / "users" / "alice.key").stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_init_ca_dry_run_does_not_touch_a_nonexistent_key_file(tmp_path: Path) -> None:
+    # dry_run never actually writes ca.key -- chmod-ing it must not raise.
+    config = _config(tmp_path)
+    service = CertificateService(config, runner=WritingRunner())
+
+    service.init_ca(dry_run=True)
+
+    assert not config.cert_path("ca.key").exists()
+
+
 def test_save_ca_material_writes_private_files(tmp_path: Path) -> None:
     config = AppConfig.model_validate(
         {
@@ -194,6 +256,31 @@ def test_revoke_certificate_pem_appends_revoked_and_generates_crl(tmp_path: Path
 
     assert result.returncode == 0
     assert "user" in (tmp_path / "data" / "certs" / "revoked.pem").read_text(encoding="utf-8")
+
+
+def test_concurrent_revocations_do_not_lose_changes(tmp_path: Path) -> None:
+    # Regression test: append_revoked_certificate() read-modify-writes the
+    # whole revoked.pem file, and uvicorn serves API requests on parallel
+    # threads -- without a lock, concurrent revocations of different
+    # certificates would each read the same original file and the last
+    # write would silently discard the others, so generate_crl() would
+    # produce a CRL that doesn't actually revoke the "lost" certificate.
+    from concurrent.futures import ThreadPoolExecutor
+
+    config = _config(tmp_path)
+    service = CertificateService(config, runner=RecordingRunner())
+    certs = [
+        f"-----BEGIN CERTIFICATE-----\nuser{i}\n-----END CERTIFICATE-----\n" for i in range(8)
+    ]
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(service.append_revoked_certificate, cert) for cert in certs]
+        for future in futures:
+            future.result()
+
+    revoked = config.cert_path("revoked.pem").read_text(encoding="utf-8")
+    for i in range(8):
+        assert f"user{i}" in revoked
 
 
 def test_list_revoked_certificates_empty_when_no_revocations(tmp_path: Path) -> None:

@@ -44,14 +44,6 @@ class DiagnosticsService:
         stderr = result.stderr.lower()
         stdout = result.stdout.lower()
         if probe.name in {"nft filter table", "nft nat table"} and "no such file" in stderr:
-            if self.config.routing.mode == "direct":
-                return CommandResult(
-                    result.argv,
-                    0,
-                    "project-owned nftables table is not active in direct routing mode",
-                    "",
-                    result.dry_run,
-                )
             return CommandResult(
                 result.argv,
                 0,

@@ -24,6 +24,17 @@ class DnsmasqConfigRenderer(TemplateRenderer):
             {"host": host, "ip": ip}
             for host, ip in (record.split() for record in config.internal_dns.local_records)
         ]
+        # Named per-profile targets: resolved via the normal upstream DNS
+        # (no server=/domain/... override, unlike split_dns_active below --
+        # that override is specifically for routing.split's own tunnel_dns
+        # toggle), just fed into that target's own nftables set so matching
+        # traffic gets marked and routed to its assigned profile.
+        targets = RoutingService(config).list_targets(
+            default_interface=config.routing.main_interface
+        )
+        named_targets_with_domains = [
+            target for target in targets if target.name != "default" and target.domains
+        ]
         context: dict[str, Any] = {
             "config": config,
             "upstream_dns": upstream_dns,
@@ -32,6 +43,7 @@ class DnsmasqConfigRenderer(TemplateRenderer):
             "split_v6_set": "split_v6",
             "split_dns_active": split_dns_active,
             "split_domains": RoutingService(config).list_domains() if split_dns_active else [],
+            "named_targets_with_domains": named_targets_with_domains,
             "blocklist_conf": InternalDnsService(config).blocklist_conf_path(),
             "local_records": local_records,
         }
