@@ -28,6 +28,11 @@
 - The Server-side routing settings (Mode, Host traffic, Host mode, and the Routes/
   Domains/route-and-domain-source lists) are now disabled in the GUI while
   `upstream.enabled` is false, since they have no effect until Upstream is turned on.
+- The Server-side routing section is now presented as a sequential wizard (this host's
+  own traffic, then a client's traffic by default, then a pointer to per-profile
+  exceptions) instead of a flat list of independent checkboxes/selects, with
+  `main_interface`/fwmark/table id/nftables prefix moved into a collapsed "Advanced"
+  block.
 
 ### Fixed
 

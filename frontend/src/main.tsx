@@ -4413,20 +4413,72 @@ function RoutingView({
   const splitDnsEnabled = splitEnabled && routingDraft.tunnelDns;
   return (
     <div className="view-stack">
-      <section className="panel">
+      <section className="panel routing-wizard">
         <div className="panel-header">
           <h2>Server-side routing</h2>
         </div>
         <p className="muted-line">
-          Decides how the server itself sends VPN client traffic onward once it leaves
-          ocserv, once Upstream above is enabled: Full sends all of it through the active
-          Upstream connection, and blocks it while Upstream is down instead of leaking it
-          out the host's own connection. Split forces only the routes/domains below
-          through Upstream (same kill-switch); everything else still uses the host
-          normally. Without an enabled Upstream connection, clients always just use the
-          host's normal routing regardless of this setting.
+          Three separate questions, in order: what the host itself does, what a client
+          gets by default, and whether any specific profile needs its own exception. Set
+          up as much of this as you like before Upstream is enabled above -- it just won't
+          do anything until then.
         </p>
-        <div className="settings-grid">
+        {!upstreamEnabled && (
+          <p className="muted-line">
+            <strong>Upstream is currently disabled.</strong> Clients get plain NAT through
+            the host regardless of the choices below.
+          </p>
+        )}
+
+        <div className="routing-step">
+          <h3>1. This host&rsquo;s own traffic</h3>
+          <p className="muted-line">
+            Independent of what clients get below -- does the server itself (not VPN
+            clients) send its own outbound traffic through Upstream too?
+          </p>
+          <label
+            className="switch"
+            title={!upstreamEnabled ? "Inert until Upstream is enabled above" : undefined}
+          >
+            <input
+              checked={routingDraft.hostTraffic}
+              disabled={!upstreamEnabled}
+              onChange={(event) =>
+                onRoutingDraftChange({ ...routingDraft, hostTraffic: event.target.checked })
+              }
+              type="checkbox"
+            />
+            <span>Route this host&rsquo;s own traffic through Upstream</span>
+          </label>
+          {routingDraft.hostTraffic && (
+            <label
+              title={
+                routingDraft.hostMode === "full"
+                  ? "Caution: matches ALL host-originated traffic, which can also capture the outbound Upstream connection itself and cause a routing loop unless your network already routes that address another way. Prefer Split with a curated route list when precision matters."
+                  : undefined
+              }
+            >
+              <span>Host mode</span>
+              <select
+                disabled={!upstreamEnabled}
+                value={routingDraft.hostMode}
+                onChange={(event) =>
+                  onRoutingDraftChange({ ...routingDraft, hostMode: event.target.value })
+                }
+              >
+                <option value="full">Full (all host traffic)</option>
+                <option value="split">Split (only the routes/domains below)</option>
+              </select>
+            </label>
+          )}
+        </div>
+
+        <div className="routing-step">
+          <h3>2. A client&rsquo;s traffic, by default</h3>
+          <p className="muted-line">
+            What happens to a connected client&rsquo;s traffic once it leaves ocserv, when
+            no profile claims it specifically (step 3)?
+          </p>
           <label title={!upstreamEnabled ? "Inert until Upstream is enabled above" : undefined}>
             <span>Mode</span>
             <select
@@ -4440,101 +4492,154 @@ function RoutingView({
               <option value="split">Split (only listed traffic via Upstream)</option>
             </select>
           </label>
-          <label
-            className="switch routing-split-dns"
-            title="Push this server's dnsmasq as the DNS for VPN clients and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → Internal DNS."
-          >
-            <input
-              checked={routingDraft.tunnelDns}
-              disabled={!upstreamEnabled || !splitEnabled}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, tunnelDns: event.target.checked })
-              }
-              type="checkbox"
-            />
-            <span>Domain split (DNS)</span>
-          </label>
-          <label
-            className="switch routing-split-dns"
-            title={
-              !upstreamEnabled
-                ? "Inert until Upstream is enabled above"
-                : "Also route this server host's own traffic through Upstream, independent of the client Mode above. Full marks all host-originated traffic; Split marks only the routes/domains below (marked in the nftables output hook). Point the host's resolver at the dnsmasq listen address for domain masks to apply in Split. Requires the container to run with network_mode: host — in the default bridge network the rules only exist inside the container's own namespace."
-            }
-          >
-            <input
-              checked={routingDraft.hostTraffic}
-              disabled={!upstreamEnabled}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, hostTraffic: event.target.checked })
-              }
-              type="checkbox"
-            />
-            <span>Host traffic</span>
-          </label>
-          <label
-            title={
-              !upstreamEnabled
-                ? "Inert until Upstream is enabled above"
-                : routingDraft.hostMode === "full"
-                  ? "Caution: matches ALL host-originated traffic, which can also capture the outbound Upstream connection itself and cause a routing loop unless your network already routes that address another way. Prefer Split with a curated route list when precision matters."
-                  : undefined
-            }
-          >
-            <span>Host mode</span>
-            <select
-              disabled={!upstreamEnabled || !routingDraft.hostTraffic}
-              value={routingDraft.hostMode}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, hostMode: event.target.value })
-              }
-            >
-              <option value="full">Full (all host traffic)</option>
-              <option value="split">Split (only listed traffic)</option>
-            </select>
-          </label>
-          <label>
-            <span>Main interface</span>
-            <input
-              value={routingDraft.mainInterface}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, mainInterface: event.target.value })
-              }
-              placeholder="auto"
-            />
-          </label>
-          <label>
-            <span>fwmark</span>
-            <input
-              value={routingDraft.fwmark}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, fwmark: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>Routing table id</span>
-            <input
-              type="number"
-              value={routingDraft.tableId}
-              onChange={(event) =>
-                onRoutingDraftChange({
-                  ...routingDraft,
-                  tableId: Math.max(1, Number(event.target.value) || 1201)
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>nftables prefix</span>
-            <input
-              value={routingDraft.nftPrefix}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, nftPrefix: event.target.value })
-              }
-            />
-          </label>
+          {splitEnabled && (
+            <div className="routing-substep">
+              <label
+                className="switch"
+                title="Push this server's dnsmasq as the DNS for VPN clients and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → Internal DNS."
+              >
+                <input
+                  checked={routingDraft.tunnelDns}
+                  disabled={!upstreamEnabled}
+                  onChange={(event) =>
+                    onRoutingDraftChange({ ...routingDraft, tunnelDns: event.target.checked })
+                  }
+                  type="checkbox"
+                />
+                <span>Also split by domain (needs this server&rsquo;s own DNS)</span>
+              </label>
+              <section className="split">
+                <BulkListEditor
+                  title="Routes"
+                  items={routes}
+                  placeholder={"10.20.0.0/16\n203.0.113.5"}
+                  busy={busy === "save-routes"}
+                  disabled={!upstreamEnabled}
+                  onSave={onSaveRoutes}
+                />
+                {splitDnsEnabled && (
+                  <BulkListEditor
+                    title="Domains"
+                    items={domains}
+                    placeholder={"internal.example\ncorp.example.com"}
+                    busy={busy === "save-domains"}
+                    disabled={!upstreamEnabled}
+                    onSave={onSaveDomains}
+                  />
+                )}
+              </section>
+              <section className="split">
+                <RoutingListSourcesPanel
+                  title="Route sources"
+                  filesLabel="Route files (one path per line)"
+                  filesPlaceholder={"/var/lib/korserver/extra-routes.txt"}
+                  urlsLabel="Route URLs (one per line)"
+                  urlsPlaceholder={"https://lists.example.com/routes.txt"}
+                  disabled={!upstreamEnabled}
+                  filesText={routingDraft.routesFilesText}
+                  urlsText={routingDraft.routesUrlsText}
+                  status={routesStatus}
+                  busy={busy}
+                  busyKeyPrefix="routes"
+                  onFilesTextChange={(value) =>
+                    onRoutingDraftChange({ ...routingDraft, routesFilesText: value })
+                  }
+                  onUrlsTextChange={(value) =>
+                    onRoutingDraftChange({ ...routingDraft, routesUrlsText: value })
+                  }
+                  onPreviewUrl={onPreviewRoutesUrl}
+                  onRefreshUrl={onRefreshRoutesUrl}
+                />
+                {splitDnsEnabled && (
+                  <RoutingListSourcesPanel
+                    title="Domain sources"
+                    filesLabel="Domain files (one path per line)"
+                    filesPlaceholder={"/var/lib/korserver/extra-domains.txt"}
+                    urlsLabel="Domain URLs (one per line)"
+                    urlsPlaceholder={"https://lists.example.com/domains.txt"}
+                    disabled={!upstreamEnabled}
+                    filesText={routingDraft.domainsFilesText}
+                    urlsText={routingDraft.domainsUrlsText}
+                    status={domainsStatus}
+                    busy={busy}
+                    busyKeyPrefix="domains"
+                    onFilesTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, domainsFilesText: value })
+                    }
+                    onUrlsTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, domainsUrlsText: value })
+                    }
+                    onPreviewUrl={onPreviewDomainsUrl}
+                    onRefreshUrl={onRefreshDomainsUrl}
+                  />
+                )}
+              </section>
+              <p className="muted-line">
+                Route/domain sources are saved together with this whole section (Save
+                button below) -- fill these in, click Save, then validate/download each URL.
+              </p>
+            </div>
+          )}
         </div>
+
+        <div className="routing-step">
+          <h3>3. A specific profile&rsquo;s exception</h3>
+          <p className="muted-line">
+            Need one particular kind of traffic to always use a specific tunnel, regardless
+            of which profile is active or what step 2 says? Open that profile in the
+            Profiles table above and fill in its own &ldquo;Target routes&rdquo;/&ldquo;Target
+            domains&rdquo; -- it gets its own dedicated fwmark/table/kill-switch, layered on
+            top of steps 1-2, not instead of them.
+          </p>
+        </div>
+
+        <details className="rendered-file routing-advanced">
+          <summary>Advanced (rarely changed)</summary>
+          <div className="settings-grid">
+            <label>
+              <span>Main interface</span>
+              <input
+                value={routingDraft.mainInterface}
+                onChange={(event) =>
+                  onRoutingDraftChange({ ...routingDraft, mainInterface: event.target.value })
+                }
+                placeholder="auto"
+              />
+            </label>
+            <label>
+              <span>fwmark</span>
+              <input
+                value={routingDraft.fwmark}
+                onChange={(event) =>
+                  onRoutingDraftChange({ ...routingDraft, fwmark: event.target.value })
+                }
+              />
+            </label>
+            <label>
+              <span>Routing table id</span>
+              <input
+                type="number"
+                value={routingDraft.tableId}
+                onChange={(event) =>
+                  onRoutingDraftChange({
+                    ...routingDraft,
+                    tableId: Math.max(1, Number(event.target.value) || 1201)
+                  })
+                }
+              />
+            </label>
+            <label>
+              <span>nftables prefix</span>
+              <input
+                value={routingDraft.nftPrefix}
+                onChange={(event) =>
+                  onRoutingDraftChange({ ...routingDraft, nftPrefix: event.target.value })
+                }
+              />
+            </label>
+          </div>
+        </details>
+
         <div className="panel-footer">
           <ActionButton
             label="Save"
@@ -4545,73 +4650,6 @@ function RoutingView({
           />
         </div>
       </section>
-      <section className="split">
-        <BulkListEditor
-          title="Routes"
-          items={routes}
-          placeholder={"10.20.0.0/16\n203.0.113.5"}
-          busy={busy === "save-routes"}
-          disabled={!upstreamEnabled || !splitEnabled}
-          onSave={onSaveRoutes}
-        />
-        <BulkListEditor
-          title="Domains"
-          items={domains}
-          placeholder={"internal.example\ncorp.example.com"}
-          busy={busy === "save-domains"}
-          disabled={!upstreamEnabled || !splitDnsEnabled}
-          onSave={onSaveDomains}
-        />
-      </section>
-      <section className="split">
-        <RoutingListSourcesPanel
-          title="Route sources"
-          filesLabel="Route files (one path per line)"
-          filesPlaceholder={"/var/lib/korserver/extra-routes.txt"}
-          urlsLabel="Route URLs (one per line)"
-          urlsPlaceholder={"https://lists.example.com/routes.txt"}
-          disabled={!upstreamEnabled || !splitEnabled}
-          filesText={routingDraft.routesFilesText}
-          urlsText={routingDraft.routesUrlsText}
-          status={routesStatus}
-          busy={busy}
-          busyKeyPrefix="routes"
-          onFilesTextChange={(value) =>
-            onRoutingDraftChange({ ...routingDraft, routesFilesText: value })
-          }
-          onUrlsTextChange={(value) =>
-            onRoutingDraftChange({ ...routingDraft, routesUrlsText: value })
-          }
-          onPreviewUrl={onPreviewRoutesUrl}
-          onRefreshUrl={onRefreshRoutesUrl}
-        />
-        <RoutingListSourcesPanel
-          title="Domain sources"
-          filesLabel="Domain files (one path per line)"
-          filesPlaceholder={"/var/lib/korserver/extra-domains.txt"}
-          urlsLabel="Domain URLs (one per line)"
-          urlsPlaceholder={"https://lists.example.com/domains.txt"}
-          disabled={!upstreamEnabled || !splitDnsEnabled}
-          filesText={routingDraft.domainsFilesText}
-          urlsText={routingDraft.domainsUrlsText}
-          status={domainsStatus}
-          busy={busy}
-          busyKeyPrefix="domains"
-          onFilesTextChange={(value) =>
-            onRoutingDraftChange({ ...routingDraft, domainsFilesText: value })
-          }
-          onUrlsTextChange={(value) =>
-            onRoutingDraftChange({ ...routingDraft, domainsUrlsText: value })
-          }
-          onPreviewUrl={onPreviewDomainsUrl}
-          onRefreshUrl={onRefreshDomainsUrl}
-        />
-      </section>
-      <p className="muted-line">
-        Route/domain sources are saved together with the Server-side routing settings above
-        (Save button up top) -- fill these in, then click Save, then validate/download each URL
-        below.
-      </p>
       <section className="panel">
         <div className="panel-header">
           <h2>nftables</h2>

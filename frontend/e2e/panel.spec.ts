@@ -346,13 +346,18 @@ test("server-side routing controls are inert until Upstream is enabled", async (
   await expect(
     routingPanel.locator("label").filter({ hasText: "Mode" }).first().locator("select")
   ).toBeDisabled();
-  await expect(routingPanel.getByLabel("Host traffic", { exact: true })).toBeDisabled();
+  await expect(
+    routingPanel.locator("label").filter({ hasText: "Route this host" }).locator("input")
+  ).toBeDisabled();
+  // Host mode only appears once Host traffic is checked -- it can't be, so
+  // it isn't rendered at all while Upstream is off.
   await expect(
     routingPanel.locator("label").filter({ hasText: "Host mode" }).locator("select")
-  ).toBeDisabled();
+  ).toHaveCount(0);
   // Infrastructure settings that matter regardless of Upstream (plain NAT
   // through the host uses main_interface/fwmark/table_id/nft_prefix too)
-  // stay editable.
+  // live under the collapsed "Advanced" details and stay editable.
+  await routingPanel.getByText("Advanced (rarely changed)").click();
   await expect(routingPanel.getByLabel("Main interface", { exact: true })).toBeEnabled();
   await expect(routingPanel.getByLabel("fwmark", { exact: true })).toBeEnabled();
 });
@@ -523,7 +528,11 @@ test("toggling host-traffic routing sends host_traffic/host_mode to the API", as
   const routingPanel = page
     .getByRole("heading", { name: "Server-side routing", exact: true })
     .locator("../..");
-  await routingPanel.getByLabel("Host traffic", { exact: true }).check();
+  await routingPanel
+    .locator("label")
+    .filter({ hasText: "Route this host" })
+    .locator("input")
+    .check();
   // Not getByLabel: this <select>'s computed accessible name concatenates
   // the label text with its own currently-selected option ("Host
   // modeFull (all host traffic)"), so an exact label match never hits.
