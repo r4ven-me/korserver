@@ -367,7 +367,13 @@ class UpstreamProfileConfig(StrictModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        if not re.match(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$", value):
+        # First character alnum, not letter-only: this exists to keep
+        # profile.name safe as a path segment (UpstreamService.
+        # _profile_secrets_dir() does secrets_dir / "upstream" / profile.name)
+        # -- a leading digit doesn't affect that at all, since "." and "/"
+        # are excluded from every position either way. No real reason to
+        # reject a name like "4laddin".
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", value):
             raise ValueError("upstream.profiles[].name must be a short identifier")
         return value
 
@@ -681,7 +687,9 @@ class OidcProviderConfig(StrictModel):
     @field_validator("name")
     @classmethod
     def validate_name(cls, value: str) -> str:
-        if not re.match(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$", value):
+        # See UpstreamProfileConfig.validate_name's comment on allowing a
+        # leading digit -- same identifier-safety reasoning applies here.
+        if not re.match(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$", value):
             raise ValueError("identity.oidc.providers.name must be a short identifier")
         return value
 

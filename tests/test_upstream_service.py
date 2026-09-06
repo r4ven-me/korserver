@@ -129,6 +129,29 @@ def _upstream_config(tmp_path: Path, **upstream: object) -> dict[str, object]:
     }
 
 
+def test_upstream_profile_name_allows_a_leading_digit(tmp_path: Path) -> None:
+    # Regression test: the name validator used to require the first
+    # character to be a letter (mirroring OidcProviderConfig/
+    # GroupPolicyConfig's own pattern at the time), which had nothing to do
+    # with the actual path-traversal concern it exists for -- "4laddin" is
+    # just as safe a path segment as "aladdin".
+    config = AppConfig.model_validate(
+        _upstream_config(
+            tmp_path,
+            profiles=[
+                {
+                    "name": "4laddin",
+                    "server": "vpn.example.com",
+                    "auth_type": "password",
+                    "username": "user",
+                }
+            ],
+        )
+    )
+
+    assert config.upstream.profiles[0].name == "4laddin"
+
+
 def test_upstream_profile_name_rejects_path_traversal_characters(tmp_path: Path) -> None:
     # Regression test: profile.name is used unsanitized as a path segment in
     # _profile_secrets_dir() (secrets_dir / "upstream" / profile.name), which
