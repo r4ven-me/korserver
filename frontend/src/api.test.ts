@@ -144,7 +144,11 @@ describe("saveRoutingSettings", () => {
       main_interface: "auto",
       fwmark: "0x0c01",
       table_id: 1201,
-      nft_prefix: "korserver"
+      nft_prefix: "korserver",
+      routes_files: [],
+      routes_urls: [],
+      domains_files: [],
+      domains_urls: []
     });
 
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];

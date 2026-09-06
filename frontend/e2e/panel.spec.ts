@@ -41,6 +41,7 @@ type MockOptions = {
   mutations?: Array<{ method: string; path: string; csrf: string | null; body: string | null }>;
   initialServerState?: "running" | "stopped";
   routingMode?: "full" | "split";
+  upstreamEnabled?: boolean;
 };
 
 async function mockApi(page: Page, options: MockOptions = {}) {
@@ -114,6 +115,28 @@ async function mockApi(page: Page, options: MockOptions = {}) {
       "/api/routing/domains":
         method === "GET" ? domains : JSON.parse(route.request().postData() ?? "{}").items ?? [],
       "/api/routing/settings": { status: "ok" },
+      "/api/routing/routes/status": { files: [], urls: [] },
+      "/api/routing/domains/status": { files: [], urls: [] },
+      "/api/routing/routes/refresh": {
+        status: "refreshed",
+        url: "",
+        total_lines: 0,
+        valid: 0,
+        skipped: 0,
+        sample: [],
+        saved: true,
+        written: []
+      },
+      "/api/routing/domains/refresh": {
+        status: "refreshed",
+        url: "",
+        total_lines: 0,
+        valid: 0,
+        skipped: 0,
+        sample: [],
+        saved: true,
+        written: []
+      },
       "/api/routing/reload": [commandResult],
       "/api/routing/nft": commandResult,
       "/api/routing/nft/apply": [commandResult],
@@ -133,7 +156,7 @@ async function mockApi(page: Page, options: MockOptions = {}) {
       },
       "/api/internal-dns/settings": { status: "saved" },
       "/api/upstream/status": {
-        enabled: false,
+        enabled: options.upstreamEnabled ?? false,
         active_profile: null,
         interface: "oc-middle0",
         connected: false,
@@ -303,6 +326,37 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
   ).toBeVisible();
 });
 
+test("server-side routing controls are inert until Upstream is enabled", async ({ page }) => {
+  // Regression test: routing.mode/host_traffic/host_mode and the Routes/
+  // Domains lists have no effect at all while upstream.enabled is false
+  // (clients just get plain NAT through the host regardless) -- the panel
+  // used to leave them fully interactive anyway, inviting an admin to
+  // "set" something that silently does nothing.
+  await mockApi(page, { upstreamEnabled: false });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  const routingPanel = page
+    .getByRole("heading", { name: "Server-side routing", exact: true })
+    .locator("../..");
+
+  // Not getByLabel("Mode"): same select accessible-name-concatenation quirk
+  // as "Host mode" below (label text + currently selected option text).
+  await expect(
+    routingPanel.locator("label").filter({ hasText: "Mode" }).first().locator("select")
+  ).toBeDisabled();
+  await expect(routingPanel.getByLabel("Host traffic", { exact: true })).toBeDisabled();
+  await expect(
+    routingPanel.locator("label").filter({ hasText: "Host mode" }).locator("select")
+  ).toBeDisabled();
+  // Infrastructure settings that matter regardless of Upstream (plain NAT
+  // through the host uses main_interface/fwmark/table_id/nft_prefix too)
+  // stay editable.
+  await expect(routingPanel.getByLabel("Main interface", { exact: true })).toBeEnabled();
+  await expect(routingPanel.getByLabel("fwmark", { exact: true })).toBeEnabled();
+});
+
 test("shows the lazy xterm view only when terminal access is enabled", async ({ page }) => {
   await mockApi(page, { terminalEnabled: true });
   await signIn(page);
@@ -334,6 +388,7 @@ test("core management buttons call expected API endpoints with CSRF", async ({ p
     routes: ["10.20.0.0/16"],
     domains: ["internal.example"],
     routingMode: "split",
+    upstreamEnabled: true,
     initialServerState: "stopped"
   });
   page.on("dialog", (dialog) => dialog.accept());
@@ -460,7 +515,7 @@ test("toggling host-traffic routing sends host_traffic/host_mode to the API", as
   page
 }) => {
   const mutations: MockOptions["mutations"] = [];
-  await mockApi(page, { mutations });
+  await mockApi(page, { mutations, upstreamEnabled: true });
   await signIn(page);
 
   await page.getByRole("button", { name: "Config", exact: true }).click();

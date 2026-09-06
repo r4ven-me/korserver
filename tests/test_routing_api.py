@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 from fastapi.testclient import TestClient
@@ -128,3 +129,119 @@ def test_routing_domains_bulk_set_replaces_the_whole_list(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     assert response.json() == ["corp.example.com", "internal.example"]
+
+
+def test_routing_settings_saves_static_file_and_url_lists(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    static_routes = str(tmp_path / "static-routes.txt")
+    static_domains = str(tmp_path / "static-domains.txt")
+
+    response = client.post(
+        "/api/routing/settings",
+        auth=("admin", "secret"),
+        json={
+            "mode": "full",
+            "routes_files": [static_routes],
+            "routes_urls": ["https://lists.example.com/routes.txt"],
+            "domains_files": [static_domains],
+            "domains_urls": ["https://lists.example.com/domains.txt"],
+        },
+    )
+
+    assert response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["routing"]["split"]["routes_files"] == [static_routes]
+    assert saved["routing"]["split"]["routes_urls"] == ["https://lists.example.com/routes.txt"]
+    assert saved["routing"]["split"]["domains_files"] == [static_domains]
+    assert saved["routing"]["split"]["domains_urls"] == ["https://lists.example.com/domains.txt"]
+
+
+def test_routing_routes_status_reports_files_and_urls(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    static_routes = tmp_path / "static-routes.txt"
+    static_routes.write_text("10.40.0.0/16\n", encoding="utf-8")
+    client.post(
+        "/api/routing/settings",
+        auth=("admin", "secret"),
+        json={"mode": "full", "routes_files": [str(static_routes)]},
+    )
+
+    response = client.get("/api/routing/routes/status", auth=("admin", "secret"))
+
+    assert response.status_code == 200
+    assert response.json()["files"] == [
+        {"path": str(static_routes), "exists": True, "count": 1}
+    ]
+    assert response.json()["urls"] == []
+
+
+def test_routing_routes_refresh_rejects_unsaved_url(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/routing/routes/refresh",
+        auth=("admin", "secret"),
+        json={"url": "https://unsaved.example.com/x"},
+    )
+
+    assert response.status_code == 400
+
+
+def test_routing_routes_refresh_fetches_and_caches(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    url = "https://lists.example.com/routes.txt"
+    client.post(
+        "/api/routing/settings",
+        auth=("admin", "secret"),
+        json={"mode": "full", "routes_urls": [url]},
+    )
+
+    with patch(
+        "korserver.services.external_lists.fetch_url_text",
+        return_value="10.60.0.0/16\ngarbage\n",
+    ):
+        response = client.post(
+            "/api/routing/routes/refresh",
+            auth=("admin", "secret"),
+            json={"url": url},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "refreshed"
+    assert payload["valid"] == 1
+    assert payload["skipped"] == 1
+    assert payload["saved"] is True
+    assert client.get("/api/routing/routes", auth=("admin", "secret")).json() == [
+        "10.60.0.0/16"
+    ]
+
+
+def test_routing_domains_refresh_preview_does_not_persist(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    url = "https://lists.example.com/domains.txt"
+    client.post(
+        "/api/routing/settings",
+        auth=("admin", "secret"),
+        json={"mode": "full", "domains_urls": [url]},
+    )
+
+    with patch(
+        "korserver.services.external_lists.fetch_url_text",
+        return_value="corp.example.com\n",
+    ):
+        response = client.post(
+            "/api/routing/domains/refresh",
+            auth=("admin", "secret"),
+            json={"url": url, "preview": True},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "previewed"
+    assert response.json()["saved"] is False
+    assert client.get("/api/routing/domains", auth=("admin", "secret")).json() == []

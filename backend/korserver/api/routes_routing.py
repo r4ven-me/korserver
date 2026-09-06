@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
@@ -26,6 +26,11 @@ class DryRunRequest(BaseModel):
     dry_run: bool = False
 
 
+class ListUrlRefreshRequest(BaseModel):
+    url: str
+    preview: bool = False
+
+
 class RoutingSettingsRequest(BaseModel):
     mode: str
     tunnel_dns: bool = False
@@ -37,6 +42,10 @@ class RoutingSettingsRequest(BaseModel):
     fwmark: str | None = None
     table_id: int | None = None
     nft_prefix: str | None = None
+    routes_files: list[str] = Field(default_factory=list)
+    routes_urls: list[str] = Field(default_factory=list)
+    domains_files: list[str] = Field(default_factory=list)
+    domains_urls: list[str] = Field(default_factory=list)
 
 
 def command_results(
@@ -61,6 +70,68 @@ def list_routes(request: Request) -> list[str]:
     return RoutingService(config).list_routes()
 
 
+@router.get("/routes/status")
+def routes_status(request: Request) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    service = RoutingService(config)
+    return {"files": service.routes_files_status(), "urls": service.routes_urls_status()}
+
+
+@router.get("/domains/status")
+def domains_status(request: Request) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    service = RoutingService(config)
+    return {"files": service.domains_files_status(), "urls": service.domains_urls_status()}
+
+
+@router.post("/routes/refresh")
+def refresh_routes_url(request: Request, payload: ListUrlRefreshRequest) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    if payload.url not in config.routing.split.routes_urls:
+        raise HTTPException(
+            status_code=400,
+            detail="url is not one of the saved routing.split.routes_urls; save it first",
+        )
+    result = RoutingService(config).refresh_route_url(payload.url, preview=payload.preview)
+    written: list[str] = []
+    if result.saved:
+        written = [str(path) for path in ConfigService().write_rendered_files(config)]
+    return {
+        "status": "previewed" if payload.preview else "refreshed",
+        "url": result.url,
+        "total_lines": result.total_lines,
+        "valid": result.valid,
+        "skipped": result.skipped,
+        "sample": result.sample,
+        "saved": result.saved,
+        "written": written,
+    }
+
+
+@router.post("/domains/refresh")
+def refresh_domains_url(request: Request, payload: ListUrlRefreshRequest) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    if payload.url not in config.routing.split.domains_urls:
+        raise HTTPException(
+            status_code=400,
+            detail="url is not one of the saved routing.split.domains_urls; save it first",
+        )
+    result = RoutingService(config).refresh_domain_url(payload.url, preview=payload.preview)
+    written: list[str] = []
+    if result.saved:
+        written = [str(path) for path in ConfigService().write_rendered_files(config)]
+    return {
+        "status": "previewed" if payload.preview else "refreshed",
+        "url": result.url,
+        "total_lines": result.total_lines,
+        "valid": result.valid,
+        "skipped": result.skipped,
+        "sample": result.sample,
+        "saved": result.saved,
+        "written": written,
+    }
+
+
 @router.post("/settings")
 def save_routing_settings(
     request: Request,
@@ -68,6 +139,10 @@ def save_routing_settings(
 ) -> dict[str, object]:
     split: dict[str, object] = {
         "tunnel_dns": payload.tunnel_dns,
+        "routes_files": payload.routes_files,
+        "routes_urls": payload.routes_urls,
+        "domains_files": payload.domains_files,
+        "domains_urls": payload.domains_urls,
     }
     if payload.dnsmasq_listen is not None:
         split["dnsmasq_listen"] = payload.dnsmasq_listen

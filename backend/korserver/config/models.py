@@ -69,6 +69,33 @@ def _validate_local_record(value: str) -> str:
     return f"{_validate_domain(hostname)} {_validate_ip(ip)}"
 
 
+def _dedup_paths(value: list[Path]) -> list[Path]:
+    deduped: list[Path] = []
+    seen: set[Path] = set()
+    for path in value:
+        if path not in seen:
+            deduped.append(path)
+            seen.add(path)
+    return deduped
+
+
+def _validate_http_url_list(value: list[str], *, field_name: str) -> list[str]:
+    validated: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        candidate = item.strip()
+        if not candidate:
+            continue
+        if not candidate.startswith(("https://", "http://")):
+            raise ValueError(f"{field_name} entries must be HTTP(S) URLs")
+        if any(char.isspace() for char in candidate):
+            raise ValueError(f"{field_name} entries must not contain whitespace")
+        if candidate not in seen:
+            validated.append(candidate)
+            seen.add(candidate)
+    return validated
+
+
 def _validate_interface_name(value: str) -> str:
     # IFNAMSIZ is 16 including the NUL terminator, so 15 usable characters.
     if not re.match(r"^[A-Za-z0-9_.-]{1,15}$", value):
@@ -525,6 +552,16 @@ class RoutingSplitConfig(StrictModel):
     domains_file: Path = Path("/var/lib/korserver/domains.txt")
     routes: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
+    # Static, admin-configured external sources -- same shape as
+    # internal_dns's blocklist_files/blocklist_urls: korserver reads/fetches
+    # and caches these, merged in alongside the inline `routes`/`domains`
+    # lists above and the separate runtime-editable routes_file/domains_file
+    # (which `korctl routes/domains add/delete` manage). See
+    # RoutingService.list_routes()/list_domains().
+    routes_files: list[Path] = Field(default_factory=list)
+    routes_urls: list[str] = Field(default_factory=list)
+    domains_files: list[Path] = Field(default_factory=list)
+    domains_urls: list[str] = Field(default_factory=list)
 
     @field_validator("dnsmasq_listen")
     @classmethod
@@ -542,6 +579,21 @@ class RoutingSplitConfig(StrictModel):
     @classmethod
     def validate_domains(cls, value: list[str]) -> list[str]:
         return [_validate_domain(item) for item in value]
+
+    @field_validator("routes_files", "domains_files")
+    @classmethod
+    def validate_list_files(cls, value: list[Path]) -> list[Path]:
+        return _dedup_paths(value)
+
+    @field_validator("routes_urls")
+    @classmethod
+    def validate_routes_urls(cls, value: list[str]) -> list[str]:
+        return _validate_http_url_list(value, field_name="routing.split.routes_urls")
+
+    @field_validator("domains_urls")
+    @classmethod
+    def validate_domains_urls(cls, value: list[str]) -> list[str]:
+        return _validate_http_url_list(value, field_name="routing.split.domains_urls")
 
 
 class RoutingConfig(StrictModel):
@@ -603,33 +655,12 @@ class InternalDnsConfig(StrictModel):
     @field_validator("blocklist_files")
     @classmethod
     def validate_blocklist_files(cls, value: list[Path]) -> list[Path]:
-        deduped: list[Path] = []
-        seen: set[Path] = set()
-        for path in value:
-            if path not in seen:
-                deduped.append(path)
-                seen.add(path)
-        return deduped
+        return _dedup_paths(value)
 
     @field_validator("blocklist_urls")
     @classmethod
     def validate_blocklist_urls(cls, value: list[str]) -> list[str]:
-        validated: list[str] = []
-        seen: set[str] = set()
-        for item in value:
-            candidate = item.strip()
-            if not candidate:
-                continue
-            if not candidate.startswith(("https://", "http://")):
-                raise ValueError("internal_dns.blocklist_urls entries must be HTTP(S) URLs")
-            if any(char.isspace() for char in candidate):
-                raise ValueError(
-                    "internal_dns.blocklist_urls entries must not contain whitespace"
-                )
-            if candidate not in seen:
-                validated.append(candidate)
-                seen.add(candidate)
-        return validated
+        return _validate_http_url_list(value, field_name="internal_dns.blocklist_urls")
 
     @field_validator("local_records")
     @classmethod

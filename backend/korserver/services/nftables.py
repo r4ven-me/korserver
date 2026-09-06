@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from korserver.config.models import AppConfig
@@ -9,6 +10,8 @@ from korserver.services.command import CommandResult, CommandRunner
 from korserver.services.files import FileManager
 from korserver.services.policy_routing import PolicyRoutingService
 from korserver.services.routing import RoutingTarget
+
+_HANDLE_RE = re.compile(r"#\s*handle\s+(\d+)\s*$")
 
 
 class NftablesService:
@@ -53,6 +56,7 @@ class NftablesService:
             return [
                 CommandResult(("nft", "-f", str(target)), 0, content, "", True),
                 *self._reassert_policy_routing(targets, resolved_interface, dry_run=True),
+                *self._ensure_docker_forward_compat(dry_run=True),
             ]
         self.files.atomic_write_text(target, content)
         # A single `nft -f` invocation is one atomic transaction (see the
@@ -71,6 +75,7 @@ class NftablesService:
         if applied.ok:
             policy_results = self._reassert_policy_routing(targets, resolved_interface)
             policy_results.extend(self._cleanup_stale_targets(targets))
+            policy_results.extend(self._ensure_docker_forward_compat())
         if applied.ok and not applied.stdout.strip():
             results[-1] = CommandResult(
                 applied.argv,
@@ -183,6 +188,101 @@ class NftablesService:
         )
         return results
 
+    def _docker_forward_compat_exprs(self) -> tuple[str, str]:
+        network = self.config.server.ipv4_network
+        return (f"ip saddr {network} accept", f"ip daddr {network} accept")
+
+    def _ensure_docker_forward_compat(self, *, dry_run: bool = False) -> list[CommandResult]:
+        """Keep VPN client traffic forwardable on a Docker-managed host.
+
+        Docker maintains its own `ip filter` table with a forward-hook
+        chain whose policy is drop (recent Docker/Moby releases harden the
+        default FORWARD policy) and which only accepts docker0-related
+        traffic. Every base chain registered at a given netfilter hook is
+        evaluated independently -- an "accept" verdict in korserver's own
+        `inet <prefix>_filter` forward chain does not exempt a packet from
+        a separate DROP-policy chain in another table, so under
+        `network_mode: host` the VPN client's forwarded traffic (to the
+        host's uplink, or to an upstream/middle-server tunnel) is unrelated
+        to docker0 and falls through Docker's own policy regardless of what
+        korserver's tables allow -- the kill-switch drop rule still works
+        exactly the same way, independently, on top of this.
+
+        `DOCKER-USER` is the chain Docker itself documents as the place for
+        this kind of external interoperability rule (evaluated before
+        Docker's own rules, and never rewritten by Docker except at chain
+        creation). Scoped to the VPN client subnet -- the same address range
+        already used for the masquerade rule -- rather than a specific
+        tunnel device name, since ocserv assigns a distinct per-session
+        device (`kor-client0`, `kor-client1`, ...) that isn't known up
+        front, and the same forwarding gap applies to upstream tunnel
+        interfaces too.
+
+        A silent no-op if Docker (or this exact chain) isn't present --
+        this is a compatibility shim for a Docker-managed host's own
+        firewall, not a korserver requirement.
+        """
+        check = self.runner.run(
+            ["nft", "list", "chain", "ip", "filter", "DOCKER-USER"],
+            check=False,
+            timeout=10,
+            dry_run=dry_run,
+        )
+        if dry_run:
+            return [check]
+        if not check.ok:
+            return []
+        results: list[CommandResult] = []
+        for expr in self._docker_forward_compat_exprs():
+            if expr in check.stdout:
+                continue
+            results.append(
+                self.runner.run(
+                    ["nft", "insert", "rule", "ip", "filter", "DOCKER-USER", *expr.split()],
+                    check=False,
+                    timeout=10,
+                )
+            )
+        return results
+
+    def _remove_docker_forward_compat(self, *, dry_run: bool = False) -> list[CommandResult]:
+        check = self.runner.run(
+            ["nft", "-a", "list", "chain", "ip", "filter", "DOCKER-USER"],
+            check=False,
+            timeout=10,
+            dry_run=dry_run,
+        )
+        if dry_run:
+            return [check]
+        if not check.ok:
+            return []
+        exprs = self._docker_forward_compat_exprs()
+        results: list[CommandResult] = []
+        for line in check.stdout.splitlines():
+            stripped = line.strip()
+            if not any(stripped.startswith(expr) for expr in exprs):
+                continue
+            match = _HANDLE_RE.search(stripped)
+            if not match:
+                continue
+            results.append(
+                self.runner.run(
+                    [
+                        "nft",
+                        "delete",
+                        "rule",
+                        "ip",
+                        "filter",
+                        "DOCKER-USER",
+                        "handle",
+                        match.group(1),
+                    ],
+                    check=False,
+                    timeout=10,
+                )
+            )
+        return results
+
     def _explain_apply_failure(self, result: CommandResult) -> CommandResult:
         signal_note = ""
         if result.returncode < 0:
@@ -233,4 +333,5 @@ class NftablesService:
                 check=False,
                 dry_run=dry_run,
             ),
+            *self._remove_docker_forward_compat(dry_run=dry_run),
         ]

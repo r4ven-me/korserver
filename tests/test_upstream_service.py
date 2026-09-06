@@ -34,6 +34,14 @@ class FakeRunner:
         self.calls.append({"argv": argv, **kwargs})
         if argv[0] == "openconnect" and self.tmp_path is not None:
             _write_fake_openconnect_pid(argv, self.processes, self.tmp_path)
+        # Simulate a plain (non-Docker-managed) host for
+        # NftablesService._ensure_docker_forward_compat()'s existence check,
+        # so it's a no-op and doesn't add extra "nft" calls these tests
+        # don't otherwise expect.
+        if tuple(argv[:5]) == ("nft", "list", "chain", "ip", "filter"):
+            return CommandResult(
+                argv=tuple(argv), returncode=1, stdout="", stderr="No such file or directory"
+            )
         return CommandResult(argv=tuple(argv), returncode=0, stdout="", stderr="")
 
     def call_for(self, program: str) -> dict[str, Any]:
@@ -723,9 +731,11 @@ def test_connect_active_applies_nftables_before_dialing_when_mode_not_direct(
         runner.close()
 
     programs = [call["argv"][0] for call in runner.calls]
-    # A single atomic `nft -f` load now folds the old table delete/redefine
-    # sequence into one transaction (see templates/nftables.nft.j2).
-    assert programs.count("nft") == 1
+    # One atomic `nft -f` load (folding the old table delete/redefine
+    # sequence into one transaction, see templates/nftables.nft.j2) plus one
+    # `nft list chain ...` existence check for the Docker DOCKER-USER
+    # compat shim (a no-op here since FakeRunner reports it absent).
+    assert programs.count("nft") == 2
     assert programs.index("nft") < programs.index("openconnect")
 
 

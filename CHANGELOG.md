@@ -16,6 +16,29 @@
   fwmark/table_id offset, for when the default (derived from the profile's position in
   `upstream.profiles`) needs to be pinned.
 - Structured GUI control for `upstream.check_settle_seconds` (previously YAML-only).
+- `routing.split.routes_files`/`routes_urls` and `domains_files`/`domains_urls`: static,
+  admin-configured external sources for split routes/domains, the same shape as
+  `internal_dns`'s `blocklist_files`/`blocklist_urls` -- korserver reads/fetches and
+  caches them, merged in alongside the inline lists and the existing runtime-editable
+  routes/domains files. New GUI fields and "Validate URL"/"Download & apply" actions in
+  the Upstream tab's Server-side routing section.
+
+### Changed
+
+- The Server-side routing settings (Mode, Host traffic, Host mode, and the Routes/
+  Domains/route-and-domain-source lists) are now disabled in the GUI while
+  `upstream.enabled` is false, since they have no effect until Upstream is turned on.
+
+### Fixed
+
+- VPN clients could connect successfully but get no network access at all through the
+  tunnel on a Docker host whose `ip filter` FORWARD chain defaults to policy drop (recent
+  Docker/Moby releases) and only accepts docker0-related traffic: under
+  `network_mode: host`, the VPN client's forwarded traffic is unrelated to docker0 and
+  fell through that drop policy regardless of korserver's own (separate table) rules.
+  `korctl nft apply` now also ensures a compatibility accept rule in Docker's own
+  `DOCKER-USER` chain (the interoperability hook Docker itself documents for this),
+  scoped to the VPN client subnet; a no-op on non-Docker hosts.
 
 ### Removed
 

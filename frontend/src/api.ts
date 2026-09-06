@@ -751,6 +751,69 @@ export function setDomains(token: string, items: string[]): Promise<string[]> {
   });
 }
 
+export type RoutingListFileStatus = {
+  path: string;
+  exists: boolean;
+  count: number;
+};
+
+export type RoutingListUrlStatus = {
+  url: string;
+  count: number;
+  meta: {
+    url?: string;
+    fetched_at?: number;
+    valid?: number;
+    skipped?: number;
+  } | null;
+};
+
+export type RoutingListStatus = {
+  files: RoutingListFileStatus[];
+  urls: RoutingListUrlStatus[];
+};
+
+export type RoutingListRefreshResult = {
+  status: string;
+  url: string;
+  total_lines: number;
+  valid: number;
+  skipped: number;
+  sample: string[];
+  saved: boolean;
+  written: string[];
+};
+
+export function fetchRoutesStatus(token: string): Promise<RoutingListStatus> {
+  return requestJson<RoutingListStatus>("/api/routing/routes/status", token);
+}
+
+export function fetchDomainsStatus(token: string): Promise<RoutingListStatus> {
+  return requestJson<RoutingListStatus>("/api/routing/domains/status", token);
+}
+
+export function refreshRoutesUrl(
+  token: string,
+  url: string,
+  preview: boolean
+): Promise<RoutingListRefreshResult> {
+  return requestJson<RoutingListRefreshResult>("/api/routing/routes/refresh", token, {
+    method: "POST",
+    body: body({ url, preview })
+  });
+}
+
+export function refreshDomainsUrl(
+  token: string,
+  url: string,
+  preview: boolean
+): Promise<RoutingListRefreshResult> {
+  return requestJson<RoutingListRefreshResult>("/api/routing/domains/refresh", token, {
+    method: "POST",
+    body: body({ url, preview })
+  });
+}
+
 export function saveRoutingSettings(
   token: string,
   payload: {
@@ -764,6 +827,10 @@ export function saveRoutingSettings(
     fwmark: string;
     table_id: number;
     nft_prefix: string;
+    routes_files: string[];
+    routes_urls: string[];
+    domains_files: string[];
+    domains_urls: string[];
   }
 ): Promise<{ status: string }> {
   return requestJson<{ status: string }>("/api/routing/settings", token, {

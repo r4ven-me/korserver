@@ -97,6 +97,8 @@ import {
   fetchRenderedConfig,
   fetchServerProcesses,
   fetchRoutes,
+  fetchRoutesStatus,
+  fetchDomainsStatus,
   fetchServerStatus,
   fetchSessions,
   fetchSoftwareVersions,
@@ -110,6 +112,8 @@ import {
   login,
   logout as logoutSession,
   refreshInternalDnsBlocklist,
+  refreshRoutesUrl,
+  refreshDomainsUrl,
   reloadRouting,
   reloadServer,
   restartServer,
@@ -173,6 +177,7 @@ import {
   type OidcProviderDraft,
   type ProcessStatus,
   type RevokedCertificate,
+  type RoutingListStatus,
   type SoftwareVersion,
   type SessionRecord,
   type TotpSetup,
@@ -313,6 +318,8 @@ type AppState = {
   sessions: SessionRecord[];
   routes: string[];
   domains: string[];
+  routesStatus: RoutingListStatus | null;
+  domainsStatus: RoutingListStatus | null;
   upstream: UpstreamStatus | null;
   upstreamProfiles: UpstreamProfile[];
   identity: IdentityStatus | null;
@@ -338,6 +345,8 @@ const emptyState: AppState = {
   sessions: [],
   routes: [],
   domains: [],
+  routesStatus: null,
+  domainsStatus: null,
   upstream: null,
   upstreamProfiles: [],
   identity: null,
@@ -513,7 +522,11 @@ function App() {
     mainInterface: "auto",
     fwmark: "0x0c01",
     tableId: 1201,
-    nftPrefix: "korserver"
+    nftPrefix: "korserver",
+    routesFilesText: "",
+    routesUrlsText: "",
+    domainsFilesText: "",
+    domainsUrlsText: ""
   });
   const [internalDnsDraft, setInternalDnsDraft] = useState({
     enabled: false,
@@ -705,6 +718,8 @@ function App() {
             fetchSessions(token),
             fetchRoutes(token),
             fetchDomains(token),
+            fetchRoutesStatus(token),
+            fetchDomainsStatus(token),
             fetchIdentity(token),
             fetchInternalDnsStatus(token),
             fetchUpstreamStatus(token),
@@ -736,6 +751,8 @@ function App() {
           sessions,
           routes,
           domains,
+          routesStatus,
+          domainsStatus,
           identity,
           internalDns,
           upstream,
@@ -757,6 +774,8 @@ function App() {
           sessions: current.sessions,
           routes: settledValue(routes, current.routes),
           domains: settledValue(domains, current.domains),
+          routesStatus: settledValue(routesStatus, current.routesStatus),
+          domainsStatus: settledValue(domainsStatus, current.domainsStatus),
           identity: settledValue(identity, current.identity),
           internalDns: settledValue(internalDns, current.internalDns),
           upstream: settledValue(upstream, current.upstream),
@@ -1247,11 +1266,63 @@ function App() {
         main_interface: routingDraft.mainInterface,
         fwmark: routingDraft.fwmark,
         table_id: routingDraft.tableId,
-        nft_prefix: routingDraft.nftPrefix
+        nft_prefix: routingDraft.nftPrefix,
+        routes_files: splitLines(routingDraft.routesFilesText),
+        routes_urls: splitLines(routingDraft.routesUrlsText),
+        domains_files: splitLines(routingDraft.domainsFilesText),
+        domains_urls: splitLines(routingDraft.domainsUrlsText)
       })
     );
     if (result !== null) {
       recordCommand("routing", syntheticCommand(["korctl", "routing", "settings"], "saved"));
+    }
+  };
+
+  const handleRefreshRoutesUrl = async (url: string, preview: boolean) => {
+    const result = await runAction(
+      preview ? `routes-preview-${url}` : `routes-refresh-${url}`,
+      preview ? "Route URL validated" : "Route list downloaded and applied",
+      (token) => refreshRoutesUrl(token, url, preview)
+    );
+    if (result !== null) {
+      const argv = ["korctl", "routes", "refresh", "--url", url];
+      if (preview) argv.push("--preview");
+      const sample = result.sample.length
+        ? `sample:\n  ${result.sample.join("\n  ")}`
+        : "sample: (empty)";
+      recordCommand(
+        "routing",
+        syntheticCommand(
+          argv,
+          [`url: ${result.url}`, `valid: ${result.valid}`, `skipped: ${result.skipped}`, sample].join(
+            "\n"
+          )
+        )
+      );
+    }
+  };
+
+  const handleRefreshDomainsUrl = async (url: string, preview: boolean) => {
+    const result = await runAction(
+      preview ? `domains-preview-${url}` : `domains-refresh-${url}`,
+      preview ? "Domain URL validated" : "Domain list downloaded and applied",
+      (token) => refreshDomainsUrl(token, url, preview)
+    );
+    if (result !== null) {
+      const argv = ["korctl", "domains", "refresh", "--url", url];
+      if (preview) argv.push("--preview");
+      const sample = result.sample.length
+        ? `sample:\n  ${result.sample.join("\n  ")}`
+        : "sample: (empty)";
+      recordCommand(
+        "routing",
+        syntheticCommand(
+          argv,
+          [`url: ${result.url}`, `valid: ${result.valid}`, `skipped: ${result.skipped}`, sample].join(
+            "\n"
+          )
+        )
+      );
     }
   };
 
@@ -2266,6 +2337,9 @@ function App() {
             <RoutingView
               routes={state.routes}
               domains={state.domains}
+              routesStatus={state.routesStatus}
+              domainsStatus={state.domainsStatus}
+              upstreamEnabled={Boolean(state.upstream?.enabled)}
               routingDraft={routingDraft}
               busy={busy}
               commandOutput={commandOutputs.routing ?? null}
@@ -2274,6 +2348,10 @@ function App() {
               onSaveRoutingSettings={() => void handleSaveRoutingSettings()}
               onSaveRoutes={(items) => void handleSaveRoutes(items)}
               onSaveDomains={(items) => void handleSaveDomains(items)}
+              onPreviewRoutesUrl={(url) => void handleRefreshRoutesUrl(url, true)}
+              onRefreshRoutesUrl={(url) => void handleRefreshRoutesUrl(url, false)}
+              onPreviewDomainsUrl={(url) => void handleRefreshDomainsUrl(url, true)}
+              onRefreshDomainsUrl={(url) => void handleRefreshDomainsUrl(url, false)}
               onReloadRouting={async () => {
                 const result = await runAction(
                   "reload-routing",
@@ -3101,6 +3179,10 @@ function readRoutingDraft(config: Record<string, unknown>): {
   fwmark: string;
   tableId: number;
   nftPrefix: string;
+  routesFilesText: string;
+  routesUrlsText: string;
+  domainsFilesText: string;
+  domainsUrlsText: string;
 } {
   const routing = readRecord(config.routing);
   const split = readRecord(routing.split);
@@ -3114,7 +3196,11 @@ function readRoutingDraft(config: Record<string, unknown>): {
     mainInterface: readString(routing.main_interface, "auto"),
     fwmark: readString(routing.fwmark, "0x0c01"),
     tableId: readNumber(routing.table_id, 1201),
-    nftPrefix: readString(routing.nft_prefix, "korserver")
+    nftPrefix: readString(routing.nft_prefix, "korserver"),
+    routesFilesText: readStringArray(split.routes_files).join("\n"),
+    routesUrlsText: readStringArray(split.routes_urls).join("\n"),
+    domainsFilesText: readStringArray(split.domains_files).join("\n"),
+    domainsUrlsText: readStringArray(split.domains_urls).join("\n")
   };
 }
 
@@ -4258,9 +4344,29 @@ function SessionsView({
   );
 }
 
+type RoutingDraft = {
+  mode: string;
+  tunnelDns: boolean;
+  hostTraffic: boolean;
+  hostMode: string;
+  dnsmasqListen: string;
+  dnsmasqPort: number;
+  mainInterface: string;
+  fwmark: string;
+  tableId: number;
+  nftPrefix: string;
+  routesFilesText: string;
+  routesUrlsText: string;
+  domainsFilesText: string;
+  domainsUrlsText: string;
+};
+
 function RoutingView({
   routes,
   domains,
+  routesStatus,
+  domainsStatus,
+  upstreamEnabled,
   routingDraft,
   busy,
   commandOutput,
@@ -4269,6 +4375,10 @@ function RoutingView({
   onSaveRoutingSettings,
   onSaveRoutes,
   onSaveDomains,
+  onPreviewRoutesUrl,
+  onRefreshRoutesUrl,
+  onPreviewDomainsUrl,
+  onRefreshDomainsUrl,
   onReloadRouting,
   onApplyNft,
   onCleanupNft,
@@ -4276,36 +4386,21 @@ function RoutingView({
 }: {
   routes: string[];
   domains: string[];
-  routingDraft: {
-    mode: string;
-    tunnelDns: boolean;
-    hostTraffic: boolean;
-    hostMode: string;
-    dnsmasqListen: string;
-    dnsmasqPort: number;
-    mainInterface: string;
-    fwmark: string;
-    tableId: number;
-    nftPrefix: string;
-  };
+  routesStatus: RoutingListStatus | null;
+  domainsStatus: RoutingListStatus | null;
+  upstreamEnabled: boolean;
+  routingDraft: RoutingDraft;
   busy: string | null;
   commandOutput: CommandResult | CommandResult[] | null;
   onClearCommand: () => void;
-  onRoutingDraftChange: (value: {
-    mode: string;
-    tunnelDns: boolean;
-    hostTraffic: boolean;
-    hostMode: string;
-    dnsmasqListen: string;
-    dnsmasqPort: number;
-    mainInterface: string;
-    fwmark: string;
-    tableId: number;
-    nftPrefix: string;
-  }) => void;
+  onRoutingDraftChange: (value: RoutingDraft) => void;
   onSaveRoutingSettings: () => void;
   onSaveRoutes: (items: string[]) => void;
   onSaveDomains: (items: string[]) => void;
+  onPreviewRoutesUrl: (url: string) => void;
+  onRefreshRoutesUrl: (url: string) => void;
+  onPreviewDomainsUrl: (url: string) => void;
+  onRefreshDomainsUrl: (url: string) => void;
   onReloadRouting: () => void;
   onApplyNft: () => void;
   onCleanupNft: () => void;
@@ -4332,9 +4427,10 @@ function RoutingView({
           host's normal routing regardless of this setting.
         </p>
         <div className="settings-grid">
-          <label>
+          <label title={!upstreamEnabled ? "Inert until Upstream is enabled above" : undefined}>
             <span>Mode</span>
             <select
+              disabled={!upstreamEnabled}
               value={routingDraft.mode}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
@@ -4350,7 +4446,7 @@ function RoutingView({
           >
             <input
               checked={routingDraft.tunnelDns}
-              disabled={!splitEnabled}
+              disabled={!upstreamEnabled || !splitEnabled}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, tunnelDns: event.target.checked })
               }
@@ -4360,10 +4456,15 @@ function RoutingView({
           </label>
           <label
             className="switch routing-split-dns"
-            title="Also route this server host's own traffic through Upstream, independent of the client Mode above. Full marks all host-originated traffic; Split marks only the routes/domains below (marked in the nftables output hook). Point the host's resolver at the dnsmasq listen address for domain masks to apply in Split. Requires the container to run with network_mode: host — in the default bridge network the rules only exist inside the container's own namespace."
+            title={
+              !upstreamEnabled
+                ? "Inert until Upstream is enabled above"
+                : "Also route this server host's own traffic through Upstream, independent of the client Mode above. Full marks all host-originated traffic; Split marks only the routes/domains below (marked in the nftables output hook). Point the host's resolver at the dnsmasq listen address for domain masks to apply in Split. Requires the container to run with network_mode: host — in the default bridge network the rules only exist inside the container's own namespace."
+            }
           >
             <input
               checked={routingDraft.hostTraffic}
+              disabled={!upstreamEnabled}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, hostTraffic: event.target.checked })
               }
@@ -4373,14 +4474,16 @@ function RoutingView({
           </label>
           <label
             title={
-              routingDraft.hostMode === "full"
-                ? "Caution: matches ALL host-originated traffic, which can also capture the outbound Upstream connection itself and cause a routing loop unless your network already routes that address another way. Prefer Split with a curated route list when precision matters."
-                : undefined
+              !upstreamEnabled
+                ? "Inert until Upstream is enabled above"
+                : routingDraft.hostMode === "full"
+                  ? "Caution: matches ALL host-originated traffic, which can also capture the outbound Upstream connection itself and cause a routing loop unless your network already routes that address another way. Prefer Split with a curated route list when precision matters."
+                  : undefined
             }
           >
             <span>Host mode</span>
             <select
-              disabled={!routingDraft.hostTraffic}
+              disabled={!upstreamEnabled || !routingDraft.hostTraffic}
               value={routingDraft.hostMode}
               onChange={(event) =>
                 onRoutingDraftChange({ ...routingDraft, hostMode: event.target.value })
@@ -4448,7 +4551,7 @@ function RoutingView({
           items={routes}
           placeholder={"10.20.0.0/16\n203.0.113.5"}
           busy={busy === "save-routes"}
-          disabled={!splitEnabled}
+          disabled={!upstreamEnabled || !splitEnabled}
           onSave={onSaveRoutes}
         />
         <BulkListEditor
@@ -4456,10 +4559,59 @@ function RoutingView({
           items={domains}
           placeholder={"internal.example\ncorp.example.com"}
           busy={busy === "save-domains"}
-          disabled={!splitDnsEnabled}
+          disabled={!upstreamEnabled || !splitDnsEnabled}
           onSave={onSaveDomains}
         />
       </section>
+      <section className="split">
+        <RoutingListSourcesPanel
+          title="Route sources"
+          filesLabel="Route files (one path per line)"
+          filesPlaceholder={"/var/lib/korserver/extra-routes.txt"}
+          urlsLabel="Route URLs (one per line)"
+          urlsPlaceholder={"https://lists.example.com/routes.txt"}
+          disabled={!upstreamEnabled || !splitEnabled}
+          filesText={routingDraft.routesFilesText}
+          urlsText={routingDraft.routesUrlsText}
+          status={routesStatus}
+          busy={busy}
+          busyKeyPrefix="routes"
+          onFilesTextChange={(value) =>
+            onRoutingDraftChange({ ...routingDraft, routesFilesText: value })
+          }
+          onUrlsTextChange={(value) =>
+            onRoutingDraftChange({ ...routingDraft, routesUrlsText: value })
+          }
+          onPreviewUrl={onPreviewRoutesUrl}
+          onRefreshUrl={onRefreshRoutesUrl}
+        />
+        <RoutingListSourcesPanel
+          title="Domain sources"
+          filesLabel="Domain files (one path per line)"
+          filesPlaceholder={"/var/lib/korserver/extra-domains.txt"}
+          urlsLabel="Domain URLs (one per line)"
+          urlsPlaceholder={"https://lists.example.com/domains.txt"}
+          disabled={!upstreamEnabled || !splitDnsEnabled}
+          filesText={routingDraft.domainsFilesText}
+          urlsText={routingDraft.domainsUrlsText}
+          status={domainsStatus}
+          busy={busy}
+          busyKeyPrefix="domains"
+          onFilesTextChange={(value) =>
+            onRoutingDraftChange({ ...routingDraft, domainsFilesText: value })
+          }
+          onUrlsTextChange={(value) =>
+            onRoutingDraftChange({ ...routingDraft, domainsUrlsText: value })
+          }
+          onPreviewUrl={onPreviewDomainsUrl}
+          onRefreshUrl={onRefreshDomainsUrl}
+        />
+      </section>
+      <p className="muted-line">
+        Route/domain sources are saved together with the Server-side routing settings above
+        (Save button up top) -- fill these in, then click Save, then validate/download each URL
+        below.
+      </p>
       <section className="panel">
         <div className="panel-header">
           <h2>nftables</h2>
@@ -4502,6 +4654,115 @@ function RoutingView({
   );
 }
 
+function RoutingListSourcesPanel({
+  title,
+  filesLabel,
+  filesPlaceholder,
+  urlsLabel,
+  urlsPlaceholder,
+  disabled,
+  filesText,
+  urlsText,
+  status,
+  busy,
+  busyKeyPrefix,
+  onFilesTextChange,
+  onUrlsTextChange,
+  onPreviewUrl,
+  onRefreshUrl
+}: {
+  title: string;
+  filesLabel: string;
+  filesPlaceholder: string;
+  urlsLabel: string;
+  urlsPlaceholder: string;
+  disabled: boolean;
+  filesText: string;
+  urlsText: string;
+  status: RoutingListStatus | null;
+  busy: string | null;
+  busyKeyPrefix: string;
+  onFilesTextChange: (value: string) => void;
+  onUrlsTextChange: (value: string) => void;
+  onPreviewUrl: (url: string) => void;
+  onRefreshUrl: (url: string) => void;
+}) {
+  return (
+    <section className="panel">
+      <div className="panel-header">
+        <h2>{title}</h2>
+        {status && <Pill kind="muted">{status.urls.length + status.files.length} sources</Pill>}
+      </div>
+      <div className="settings-grid internal-dns-grid">
+        <label className="blocklist-domains" title={disabled ? "Inert until Upstream is enabled and Mode is Split above" : undefined}>
+          <span>{filesLabel}</span>
+          <textarea
+            rows={3}
+            disabled={disabled}
+            placeholder={filesPlaceholder}
+            value={filesText}
+            onChange={(event) => onFilesTextChange(event.target.value)}
+          />
+        </label>
+        <label className="blocklist-domains" title={disabled ? "Inert until Upstream is enabled and Mode is Split above" : undefined}>
+          <span>{urlsLabel}</span>
+          <textarea
+            rows={3}
+            disabled={disabled}
+            placeholder={urlsPlaceholder}
+            value={urlsText}
+            onChange={(event) => onUrlsTextChange(event.target.value)}
+          />
+        </label>
+      </div>
+      {status && status.files.length > 0 && (
+        <ul className="blocklist-file-status">
+          {status.files.map((file) => (
+            <li key={file.path}>
+              <code>{file.path}</code>
+              <span className="muted-line">
+                {file.exists ? ` — ${file.count} entries` : " — file not found"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {status && status.urls.length > 0 && (
+        <ul className="blocklist-url-status">
+          {status.urls.map((entry) => {
+            const lastRefresh = entry.meta?.fetched_at
+              ? new Date(entry.meta.fetched_at * 1000).toLocaleString()
+              : null;
+            return (
+              <li key={entry.url} className="blocklist-url-entry">
+                <code>{entry.url}</code>
+                <span className="muted-line">
+                  {entry.count} entries cached
+                  {lastRefresh ? ` — last download: ${lastRefresh}` : ""}
+                </span>
+                <div className="toolbar blocklist-url-actions">
+                  <ActionButton
+                    label="Validate URL"
+                    icon={Eye}
+                    busy={busy === `${busyKeyPrefix}-preview-${entry.url}`}
+                    onClick={() => onPreviewUrl(entry.url)}
+                  />
+                  <ActionButton
+                    label="Download & apply"
+                    icon={Download}
+                    busy={busy === `${busyKeyPrefix}-refresh-${entry.url}`}
+                    onClick={() => onRefreshUrl(entry.url)}
+                  />
+                </div>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </section>
+  );
+}
+
 function InternalDnsView({
   status,
   draft,
@@ -4526,18 +4787,7 @@ function InternalDnsView({
     logQueries: boolean;
     localRecordsText: string;
   };
-  dnsServerDraft: {
-    mode: string;
-    tunnelDns: boolean;
-    hostTraffic: boolean;
-    hostMode: string;
-    dnsmasqListen: string;
-    dnsmasqPort: number;
-    mainInterface: string;
-    fwmark: string;
-    tableId: number;
-    nftPrefix: string;
-  };
+  dnsServerDraft: RoutingDraft;
   busy: string | null;
   commandOutput: CommandResult | CommandResult[] | null;
   onClearCommand: () => void;
@@ -4550,18 +4800,7 @@ function InternalDnsView({
     logQueries: boolean;
     localRecordsText: string;
   }) => void;
-  onDnsServerDraftChange: (value: {
-    mode: string;
-    tunnelDns: boolean;
-    hostTraffic: boolean;
-    hostMode: string;
-    dnsmasqListen: string;
-    dnsmasqPort: number;
-    mainInterface: string;
-    fwmark: string;
-    tableId: number;
-    nftPrefix: string;
-  }) => void;
+  onDnsServerDraftChange: (value: RoutingDraft) => void;
   onSave: () => void;
   onSaveDnsServer: () => void;
   onPreviewUrl: (url: string) => void;

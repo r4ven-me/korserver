@@ -38,6 +38,12 @@ class SuccessfulNftRunner(CommandRunner):
         extra_secrets: Sequence[str] | None = None,
     ) -> CommandResult:
         del timeout, input_text, env, check, extra_secrets
+        # Simulate a plain (non-Docker-managed) host: the DOCKER-USER
+        # compat check has nothing to find, so _ensure_docker_forward_compat
+        # is a no-op and doesn't add trailing results after the summary
+        # message this fake exists to test.
+        if tuple(argv[:5]) == ("nft", "list", "chain", "ip", "filter"):
+            return CommandResult(tuple(argv), 1, "", "No such file or directory", dry_run)
         return CommandResult(tuple(argv), 0, "", "", dry_run)
 
 
@@ -702,3 +708,103 @@ def test_list_targets_returns_only_default_without_any_profiles(tmp_path: Path) 
     targets = RoutingService(config).list_targets(default_interface="auto")
 
     assert [target.name for target in targets] == ["default"]
+
+
+class DockerUserChainRunner(CommandRunner):
+    """Simulates a Docker-managed host with a DOCKER-USER chain, optionally
+    pre-populated with the compat rules (with fake handles), for testing
+    NftablesService's insert/idempotency/removal logic against realistic
+    `nft [-a] list chain ...` output shapes."""
+
+    def __init__(self, *, prepopulated: bool = False) -> None:
+        self.calls: list[list[str]] = []
+        self._prepopulated = prepopulated
+
+    def run(self, argv: Sequence[str], **kwargs: object) -> CommandResult:
+        del kwargs
+        self.calls.append(list(argv))
+        if tuple(argv[:3]) == ("nft", "list", "chain"):
+            body = (
+                (
+                    "\t\tip saddr 10.10.10.0/24 accept # handle 21\n"
+                    "\t\tip daddr 10.10.10.0/24 accept # handle 22\n"
+                )
+                if self._prepopulated
+                else ""
+            )
+            return CommandResult(tuple(argv), 0, f"table ip filter {{\n{body}}}\n", "")
+        if tuple(argv[:3]) == ("nft", "-a", "list"):
+            body = (
+                (
+                    "\t\tip saddr 10.10.10.0/24 accept # handle 21\n"
+                    "\t\tip daddr 10.10.10.0/24 accept # handle 22\n"
+                )
+                if self._prepopulated
+                else ""
+            )
+            return CommandResult(tuple(argv), 0, f"table ip filter {{\n{body}}}\n", "")
+        return CommandResult(tuple(argv), 0, "", "")
+
+
+def test_nft_apply_inserts_docker_user_compat_rules_when_chain_present(
+    tmp_path: Path,
+) -> None:
+    # Regression test: Docker's own `ip filter` FORWARD chain (recent
+    # Docker/Moby releases) defaults to policy drop and only accepts
+    # docker0-related traffic -- under network_mode: host, the VPN client's
+    # forwarded traffic is unrelated to docker0 and falls through that drop
+    # policy regardless of korserver's own (separate table) rules. Without
+    # this compat shim, VPN clients connect successfully but get no network
+    # access at all through the tunnel.
+    config = AppConfig.model_validate(
+        {"system": {"generated_dir": tmp_path}, "server": {"ipv4_network": "10.10.10.0/24"}}
+    )
+    runner = DockerUserChainRunner(prepopulated=False)
+
+    NftablesService(config, runner=runner).apply()
+
+    assert [
+        "nft", "insert", "rule", "ip", "filter", "DOCKER-USER",
+        "ip", "saddr", "10.10.10.0/24", "accept",
+    ] in runner.calls
+    assert [
+        "nft", "insert", "rule", "ip", "filter", "DOCKER-USER",
+        "ip", "daddr", "10.10.10.0/24", "accept",
+    ] in runner.calls
+
+
+def test_nft_apply_docker_user_compat_is_idempotent(tmp_path: Path) -> None:
+    config = AppConfig.model_validate(
+        {"system": {"generated_dir": tmp_path}, "server": {"ipv4_network": "10.10.10.0/24"}}
+    )
+    runner = DockerUserChainRunner(prepopulated=True)
+
+    NftablesService(config, runner=runner).apply()
+
+    assert not [call for call in runner.calls if call[:2] == ["nft", "insert"]]
+
+
+def test_nft_apply_docker_user_compat_noop_without_docker(tmp_path: Path) -> None:
+    config = AppConfig.model_validate({"system": {"generated_dir": tmp_path}})
+    runner = MissingNftRunner()
+
+    # Must not raise even though every "nft list chain ..." check fails --
+    # this is a compatibility shim for a Docker-managed host, not a
+    # korserver requirement.
+    NftablesService(config, runner=runner).apply()
+
+
+def test_nft_cleanup_removes_docker_user_compat_rules_by_handle(tmp_path: Path) -> None:
+    config = AppConfig.model_validate(
+        {"system": {"generated_dir": tmp_path}, "server": {"ipv4_network": "10.10.10.0/24"}}
+    )
+    runner = DockerUserChainRunner(prepopulated=True)
+
+    NftablesService(config, runner=runner).cleanup()
+
+    assert [
+        "nft", "delete", "rule", "ip", "filter", "DOCKER-USER", "handle", "21",
+    ] in runner.calls
+    assert [
+        "nft", "delete", "rule", "ip", "filter", "DOCKER-USER", "handle", "22",
+    ] in runner.calls
