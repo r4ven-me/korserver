@@ -174,6 +174,51 @@ def test_upstream_profile_name_rejects_path_traversal_characters(tmp_path: Path)
         )
 
 
+def test_upstream_profile_host_routes_and_domains_are_validated(tmp_path: Path) -> None:
+    # host_routes/host_domains reuse the same _validate_cidr/_validate_domain
+    # helpers as routes/domains -- a malformed entry must be rejected the
+    # same way.
+    with pytest.raises(ValidationError):
+        AppConfig.model_validate(
+            _upstream_config(
+                tmp_path,
+                profiles=[
+                    {
+                        "name": "finance",
+                        "server": "vpn.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "route_host_enabled": True,
+                        "host_routes": ["not-a-cidr"],
+                    }
+                ],
+            )
+        )
+
+
+def test_upstream_profile_route_clients_enabled_defaults_true(tmp_path: Path) -> None:
+    # Compatibility default: existing configs that already populate
+    # routes/domains without ever having heard of route_clients_enabled must
+    # keep behaving as before (routes/domains active) after upgrading.
+    config = AppConfig.model_validate(
+        _upstream_config(
+            tmp_path,
+            profiles=[
+                {
+                    "name": "finance",
+                    "server": "vpn.example.com",
+                    "auth_type": "password",
+                    "username": "user",
+                    "routes": ["10.50.0.0/16"],
+                }
+            ],
+        )
+    )
+
+    assert config.upstream.profiles[0].route_clients_enabled is True
+    assert config.upstream.profiles[0].route_host_enabled is False
+
+
 def test_upstream_profiles_with_colliding_safe_names_are_rejected(tmp_path: Path) -> None:
     # "My-VPN" and "my_vpn" both normalize to the same nftables set name
     # (RoutingService.list_targets()'s profile_safe_name()), which would
@@ -1500,3 +1545,67 @@ def test_upstream_lock_is_reentrant_within_one_instance(tmp_path: Path) -> None:
     with service._locked(), service._locked():
         pass
     assert service._lock_depth == 0
+
+
+def test_watchdog_respects_connect_on_boot_until_first_connection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """connect_on_boot=False must not dial on its own the first time the
+    watchdog (cli.py::upstream_watch) sees the profile down, but once ANY
+    connection has succeeded (however that happened -- an admin connecting
+    manually counts), normal health-check-triggered reconnection resumes
+    regardless of this flag."""
+    from korserver import cli
+
+    config = AppConfig.model_validate(
+        _upstream_config(
+            tmp_path,
+            connect_on_boot=False,
+            check_interval=1,
+            check_threshold=1,
+            active_profile="primary",
+            profiles=[
+                {
+                    "name": "primary",
+                    "server": "vpn.example.com",
+                    "auth_type": "password",
+                    "username": "user",
+                }
+            ],
+        )
+    )
+    monkeypatch.setattr(cli, "get_config", lambda: config)
+
+    # down, down (still gated by connect_on_boot), up (a manual connect from
+    # the panel), down again (must now trigger recover() since a connection
+    # has existed since this watchdog process started).
+    healthy_sequence = iter([False, False, True, False])
+    recover_calls: list[None] = []
+    monkeypatch.setattr(
+        UpstreamService, "is_healthy", lambda self: next(healthy_sequence)
+    )
+    monkeypatch.setattr(
+        UpstreamService,
+        "recover",
+        lambda self: recover_calls.append(None) or True,
+    )
+    monkeypatch.setattr(UpstreamService, "ensure_policy_routing", lambda self: [])
+    monkeypatch.setattr(UpstreamService, "enforce_profile_enablement", lambda self: [])
+
+    class _StopLoop(Exception):
+        pass
+
+    tick_count = 0
+
+    def _fake_sleep(_seconds: float) -> None:
+        nonlocal tick_count
+        tick_count += 1
+        if tick_count >= 4:
+            raise _StopLoop
+
+    monkeypatch.setattr(cli.time, "sleep", _fake_sleep)
+
+    with pytest.raises(_StopLoop):
+        cli.upstream_watch(once=False)
+
+    assert len(recover_calls) == 1

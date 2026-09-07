@@ -35,6 +35,22 @@ table inet {{ filter_table }} {
     flags interval
     auto-merge
   }
+{% if target.host_enabled %}
+  set {{ target.host_set_v4 }} {
+    type ipv4_addr
+    flags interval
+    auto-merge
+{% if target.host_routes %}
+    elements = { {{ target.host_routes | join(", ") }} }
+{% endif %}
+  }
+
+  set {{ target.host_set_v6 }} {
+    type ipv6_addr
+    flags interval
+    auto-merge
+  }
+{% endif %}
 {% endfor %}
 
   chain prerouting {
@@ -53,7 +69,8 @@ table inet {{ filter_table }} {
 {% endfor %}
   }
 
-{% if host_traffic_enabled %}
+{% set host_targets = targets | selectattr("host_enabled") | list %}
+{% if host_traffic_enabled or host_targets %}
   chain output {
     # "route" type: the mark must trigger a fresh route lookup so the
     # packet actually moves to the fwmark policy table.
@@ -63,8 +80,8 @@ table inet {{ filter_table }} {
     # public IP happens to land in a split set) keep their normal route. The
     # VPN subnet itself is always exempt: the dnsmasq listen address and the
     # clients' per-session /32 routes live there and must never be pulled
-    # into the fwmark table. Host traffic always follows the default target
-    # only -- it isn't assignable to a specific named profile.
+    # into the fwmark table.
+{% if host_traffic_enabled %}
 {% if host_mode == "full" %}
     # Full: mark ALL host-originated traffic, not just the split sets.
     # CAUTION (operator responsibility, same as split routes never covering
@@ -81,6 +98,16 @@ table inet {{ filter_table }} {
     ct direction original ip daddr != {{ config.server.ipv4_network }} ip daddr @split_v4 counter meta mark set {{ config.routing.fwmark }}
     ct direction original ip6 daddr @split_v6 counter meta mark set {{ config.routing.fwmark }}
 {% endif %}
+{% endif %}
+    # Per-profile host routing (UpstreamProfileConfig.route_host_enabled):
+    # rendered after the default block above, so a later "meta mark set"
+    # here takes priority over the default's blanket host_mode mark for the
+    # same destination -- same "default first, named overrides win" pattern
+    # as the client-side prerouting chain.
+{% for target in host_targets %}
+    ct direction original ip daddr != {{ config.server.ipv4_network }} ip daddr @{{ target.host_set_v4 }} counter meta mark set {{ target.fwmark }}
+    ct direction original ip6 daddr @{{ target.host_set_v6 }} counter meta mark set {{ target.fwmark }}
+{% endfor %}
   }
 {% endif %}
 
@@ -99,7 +126,7 @@ table inet {{ filter_table }} {
   }
 {% endif %}
 
-{% if upstream_killswitch and host_traffic_enabled %}
+{% if (upstream_killswitch and host_traffic_enabled) or host_targets %}
   chain postrouting {
     # The host kill-switch must live in postrouting, NOT in an output-hook
     # filter chain: every chain of one hook point shares the same
@@ -111,7 +138,15 @@ table inet {{ filter_table }} {
     # Local delivery (a marked destination that is also an address on this
     # host) legitimately leaves via lo, never the tunnel.
     oifname "lo" accept
+{% if upstream_killswitch and host_traffic_enabled %}
     meta mark {{ config.routing.fwmark }} oifname != "{{ outbound_interface }}" counter drop
+{% endif %}
+    # Per-profile host routing is unconditional once a target exists (same
+    # "explicitly assigned traffic must not silently leak" philosophy as the
+    # client-side forward kill-switch above), regardless of host_traffic.
+{% for target in host_targets %}
+    meta mark {{ target.fwmark }} oifname != "{{ target.interface }}" counter drop
+{% endfor %}
   }
 {% endif %}
 }
@@ -143,5 +178,8 @@ table ip {{ nat_table }} {
     # is already covered by the saddr rules above.)
     meta mark {{ config.routing.fwmark }} oifname "{{ outbound_interface }}" counter masquerade
 {% endif %}
+{% for target in host_targets %}
+    meta mark {{ target.fwmark }} oifname "{{ target.interface }}" counter masquerade
+{% endfor %}
   }
 }

@@ -77,8 +77,12 @@ const upstreamProfileDraft: UpstreamProfileDraft = {
   server_cert_pin: "",
   check_host: "",
   camouflage_secret: "",
+  route_clients_enabled: false,
   routes: "",
   domains: "",
+  route_host_enabled: false,
+  host_routes: "",
+  host_domains: "",
   enable: true,
   enabled: true
 };
@@ -104,6 +108,28 @@ describe("saveUpstreamProfile", () => {
     const sent = JSON.parse(String(init.body));
     expect(sent.routes).toEqual(["10.50.0.0/16", "10.60.0.0/16", "10.70.0.0/16"]);
     expect(sent.domains).toEqual(["internal.example.com", "corp.example.com"]);
+  });
+
+  it("splits the host routes/domains textareas the same way as the client ones", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "saved" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveUpstreamProfile("session", {
+      ...upstreamProfileDraft,
+      route_host_enabled: true,
+      host_routes: "10.90.0.0/16, 10.91.0.0/16",
+      host_domains: "finance-internal.corp"
+    });
+
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    const sent = JSON.parse(String(init.body));
+    expect(sent.host_routes).toEqual(["10.90.0.0/16", "10.91.0.0/16"]);
+    expect(sent.host_domains).toEqual(["finance-internal.corp"]);
   });
 
   it("sends an empty array, not a list with a blank string, for an empty textarea", async () => {

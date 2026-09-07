@@ -182,3 +182,36 @@ def test_dnsmasq_render_ignores_named_target_domains_without_upstream_enabled(
     rendered = DnsmasqConfigRenderer().render(config)
 
     assert "finance-internal.corp" not in rendered
+
+
+def test_dnsmasq_render_feeds_named_target_host_domains_into_their_own_host_set(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full"},
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    {
+                        "name": "finance",
+                        "server": "finance.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "route_clients_enabled": False,
+                        "route_host_enabled": True,
+                        "host_domains": ["finance-internal.corp"],
+                    }
+                ],
+            },
+        },
+        environ={},
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+
+    assert (
+        "nftset=/finance-internal.corp/4#inet#korserver_filter#host_v4_finance,"
+        "6#inet#korserver_filter#host_v6_finance" in rendered
+    )

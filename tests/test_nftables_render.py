@@ -700,6 +700,138 @@ def test_targeted_profile_mark_overrides_default_full_mode_for_its_own_routes(
     assert default_rule_pos < finance_rule_pos
 
 
+def test_profile_host_routing_gets_its_own_set_marking_and_killswitch(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full", "fwmark": "0x0c01"},
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    _profile_with_target(
+                        "finance",
+                        interface="oc-finance",
+                        route_clients_enabled=False,
+                        route_host_enabled=True,
+                        host_routes=["10.90.0.0/16"],
+                    ),
+                ],
+            },
+        },
+        environ={},
+    )
+
+    rendered = NftablesConfigRenderer().render(config)
+
+    # finance is the 1st (only) profile -> offset 1 -> fwmark 0x0c02.
+    assert "set host_v4_finance" in rendered
+    assert "10.90.0.0/16" in rendered
+    assert (
+        f"ct direction original ip daddr != {config.server.ipv4_network} "
+        "ip daddr @host_v4_finance counter meta mark set 0x0c02" in rendered
+    )
+    assert 'meta mark 0x0c02 oifname != "oc-finance" counter drop' in rendered
+    assert 'meta mark 0x0c02 oifname "oc-finance" counter masquerade' in rendered
+    # This profile has no client routing enabled: its client-scoped set is
+    # still declared (every target gets one) but stays empty -- no elements
+    # line, so it never actually matches any client traffic.
+    assert (
+        "set split_v4_finance {\n    type ipv4_addr\n    flags interval\n    auto-merge\n  }"
+        in rendered
+    )
+
+
+def test_profile_host_routing_independent_of_global_host_traffic(tmp_path: Path) -> None:
+    # Regression: per-profile host routing must work even with the global
+    # routing.host_traffic switch off -- it's a separate, profile-scoped
+    # decision, not a special case of the default target's host marking.
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full"},
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    _profile_with_target(
+                        "finance",
+                        route_host_enabled=True,
+                        host_routes=["10.90.0.0/16"],
+                    ),
+                ],
+            },
+        },
+        environ={},
+    )
+
+    rendered = NftablesConfigRenderer().render(config)
+
+    assert "type route hook output priority mangle" in rendered
+    assert "host_v4_finance" in rendered
+
+
+def test_profile_host_routing_off_by_default_even_with_lists_populated(tmp_path: Path) -> None:
+    # host_routes/host_domains alone don't activate anything -- the toggle
+    # (route_host_enabled) must also be on, mirroring how routing.host_traffic
+    # gates routing.host_mode at the global level.
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full"},
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    _profile_with_target(
+                        "finance",
+                        route_clients_enabled=False,
+                        host_routes=["10.90.0.0/16"],
+                    ),
+                ],
+            },
+        },
+        environ={},
+    )
+
+    rendered = NftablesConfigRenderer().render(config)
+
+    assert "host_v4_finance" not in rendered
+    assert "10.90.0.0/16" not in rendered
+
+
+def test_profile_client_routing_off_suppresses_client_set_even_with_routes_populated(
+    tmp_path: Path,
+) -> None:
+    # route_clients_enabled off must ignore `routes`/`domains` (progressive
+    # disclosure: the admin can keep a list drafted without it taking
+    # effect), while host routing on the same profile keeps working.
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full"},
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    _profile_with_target(
+                        "finance",
+                        route_clients_enabled=False,
+                        routes=["10.50.0.0/16"],
+                        route_host_enabled=True,
+                        host_routes=["10.90.0.0/16"],
+                    ),
+                ],
+            },
+        },
+        environ={},
+    )
+
+    rendered = NftablesConfigRenderer().render(config)
+
+    # The client set is declared but empty -- route_clients_enabled=False
+    # means the CIDR never lands in its elements list.
+    assert "10.50.0.0/16" not in rendered
+    assert "host_v4_finance" in rendered
+    assert "10.90.0.0/16" in rendered
+
+
 def test_list_targets_returns_only_default_without_any_profiles(tmp_path: Path) -> None:
     from korserver.services.routing import RoutingService
 

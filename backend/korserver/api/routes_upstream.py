@@ -43,6 +43,7 @@ class UpstreamSettingsRequest(BaseModel):
     check_threshold: int | None = None
     check_settle_seconds: int | None = None
     failover: bool | None = None
+    connect_on_boot: bool | None = None
 
 
 class UpstreamProfileRequest(BaseModel):
@@ -65,8 +66,12 @@ class UpstreamProfileRequest(BaseModel):
     # Route these specific CIDRs/domains through this profile specifically,
     # regardless of which profile is active/default -- see
     # RoutingService.list_targets().
+    route_clients_enabled: bool = True
     routes: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
+    route_host_enabled: bool = False
+    host_routes: list[str] = Field(default_factory=list)
+    host_domains: list[str] = Field(default_factory=list)
     # Per-profile: whether the watchdog should keep this profile dialed at
     # all (UpstreamProfileConfig.enabled). Distinct from `enable` below,
     # which is the *global* upstream.enabled toggle set when saving any
@@ -122,6 +127,8 @@ def save_settings(
         patch["check_settle_seconds"] = payload.check_settle_seconds
     if payload.failover is not None:
         patch["failover"] = payload.failover
+    if payload.connect_on_boot is not None:
+        patch["connect_on_boot"] = payload.connect_on_boot
     loaded_config, written = apply_config_patch(request, {"upstream": patch})
     # Reuse _safe_profile_dump() per profile instead of this endpoint's own
     # exclude set: that set never included camouflage_secret, leaking it in

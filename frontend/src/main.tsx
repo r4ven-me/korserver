@@ -29,6 +29,7 @@ import {
   Settings,
   ShieldCheck,
   Square,
+  Star,
   Sun,
   Terminal,
   Trash2,
@@ -57,7 +58,6 @@ import {
   changePassword,
   cleanupNft,
   confirmTotp,
-  connectUpstream,
   connectUpstreamProfile,
   createCertificate,
   createP12,
@@ -69,7 +69,6 @@ import {
   deleteUpstreamProfile,
   deleteUser,
   disableTotp,
-  disconnectUpstream,
   disconnectUpstreamProfile,
   fetchConfig,
   fetchConfigDiff,
@@ -410,8 +409,12 @@ const emptyUpstreamProfileDraft: UpstreamProfileDraft = {
   server_cert_pin: "",
   check_host: "",
   camouflage_secret: "",
+  route_clients_enabled: false,
   routes: "",
   domains: "",
+  route_host_enabled: false,
+  host_routes: "",
+  host_domains: "",
   enable: true,
   enabled: true
 };
@@ -436,8 +439,12 @@ function upstreamProfileToDraft(profile: UpstreamProfile): UpstreamProfileDraft 
     // write-only, never sent back by the API (same as password/cert_pass);
     // leaving it blank on save keeps whatever secret is already stored.
     camouflage_secret: "",
+    route_clients_enabled: profile.route_clients_enabled ?? true,
     routes: listText(profile.routes ?? []),
     domains: listText(profile.domains ?? []),
+    route_host_enabled: profile.route_host_enabled ?? false,
+    host_routes: listText(profile.host_routes ?? []),
+    host_domains: listText(profile.host_domains ?? []),
     enable: true,
     enabled: profile.enabled
   };
@@ -607,6 +614,7 @@ function App() {
   const [upstreamCheckThreshold, setUpstreamCheckThreshold] = useState(3);
   const [upstreamCheckSettleSeconds, setUpstreamCheckSettleSeconds] = useState(15);
   const [upstreamFailover, setUpstreamFailover] = useState(false);
+  const [upstreamConnectOnBoot, setUpstreamConnectOnBoot] = useState(true);
   const [upstreamCheckHost, setUpstreamCheckHost] = useState("");
   const [logRequest, setLogRequest] = useState({ name: "supervisord.log", lines: 100 });
   const [liveLog, setLiveLog] = useState(false);
@@ -827,6 +835,7 @@ function App() {
           setUpstreamCheckThreshold(readNumber(upstreamConfig.check_threshold, 3));
           setUpstreamCheckSettleSeconds(readNumber(upstreamConfig.check_settle_seconds, 15));
           setUpstreamFailover(readBoolean(upstreamConfig.failover, false));
+          setUpstreamConnectOnBoot(readBoolean(upstreamConfig.connect_on_boot, true));
           setServerSettingsDraft(readServerSettingsDraft(config.value));
           setAuthMethodsDraft(readAuthMethodsDraft(config.value));
           setWebSettingsDraft(readWebSettingsDraft(config.value));
@@ -1546,7 +1555,8 @@ function App() {
           check_interval: upstreamCheckInterval,
           check_threshold: upstreamCheckThreshold,
           check_settle_seconds: upstreamCheckSettleSeconds,
-          failover: upstreamFailover
+          failover: upstreamFailover,
+          connect_on_boot: upstreamConnectOnBoot
         })
     );
     if (result !== null) {
@@ -2272,11 +2282,23 @@ function App() {
               onSetProfileEnabled={(profile, enabled) =>
                 void handleSetUpstreamProfileEnabled(profile, enabled)
               }
-              onSwitch={(profile) =>
+              onSwitch={(profile) => {
+                const current = state.upstream?.active_profile;
+                if (
+                  current &&
+                  current !== profile &&
+                  !confirmAction(
+                    `Make "${profile}" the default profile? Client/host traffic currently ` +
+                      `redirected via "${current}" will re-point to "${profile}" -- ` +
+                      "existing connections stay up."
+                  )
+                ) {
+                  return;
+                }
                 void runAction(`switch-${profile}`, `Upstream profile ${profile} selected`, (token) =>
                   switchUpstream(token, profile)
-                )
-              }
+                );
+              }}
               onDeleteProfile={(profile) => void handleDeleteUpstreamProfile(profile)}
               onCreateProfile={() => {
                 setUpstreamDraft(emptyUpstreamProfileDraft);
@@ -2289,24 +2311,6 @@ function App() {
                 setEditingUpstreamProfile(true);
                 setUpstreamDialogKey((key) => key + 1);
                 setUpstreamModalOpen(true);
-              }}
-              onConnect={async () => {
-                const result = await runAction(
-                  "connect-upstream",
-                  "Upstream connected",
-                  (token) => connectUpstream(token, dryRun),
-                  { dryRunAware: true }
-                );
-                recordCommand("upstream", result);
-              }}
-              onDisconnect={async () => {
-                const result = await runAction(
-                  "disconnect-upstream",
-                  "Upstream disconnected",
-                  (token) => disconnectUpstream(token, dryRun),
-                  { dryRunAware: true }
-                );
-                recordCommand("upstream", result);
               }}
               onConnectProfile={async (name) => {
                 const result = await runAction(
@@ -2409,6 +2413,7 @@ function App() {
             checkThreshold={upstreamCheckThreshold}
             checkSettleSeconds={upstreamCheckSettleSeconds}
             failover={upstreamFailover}
+            connectOnBoot={upstreamConnectOnBoot}
             checkHost={upstreamCheckHost}
             hasActiveProfile={Boolean(state.upstream?.active_profile)}
             busy={busy}
@@ -2417,6 +2422,7 @@ function App() {
             onCheckThresholdChange={setUpstreamCheckThreshold}
             onCheckSettleSecondsChange={setUpstreamCheckSettleSeconds}
             onFailoverChange={setUpstreamFailover}
+            onConnectOnBootChange={setUpstreamConnectOnBoot}
             onCheckHostChange={setUpstreamCheckHost}
             onClose={() => setUpstreamSettingsModalOpen(false)}
             onSave={async (event) => {
@@ -4585,11 +4591,11 @@ function RoutingView({
         <div className="routing-step">
           <h3>3. A specific profile&rsquo;s exception</h3>
           <p className="muted-line">
-            Need one particular kind of traffic to always use a specific tunnel, regardless
-            of which profile is active or what step 2 says? Open that profile in the
-            Profiles table above and fill in its own &ldquo;Target routes&rdquo;/&ldquo;Target
-            domains&rdquo; -- it gets its own dedicated fwmark/table/kill-switch, layered on
-            top of steps 1-2, not instead of them.
+            Need one particular kind of traffic -- client, host, or both -- to always use a
+            specific tunnel, regardless of which profile is active or what steps 1-2 say?
+            Edit that profile above and turn on its own client/host routing there. It gets
+            its own dedicated fwmark/table/kill-switch, layered on top of steps 1-2, not
+            instead of them.
           </p>
         </div>
 
@@ -5581,8 +5587,6 @@ function UpstreamView({
   onCreateProfile,
   onEditProfile,
   onOpenSettings,
-  onConnect,
-  onDisconnect,
   onConnectProfile,
   onDisconnectProfile
 }: {
@@ -5598,52 +5602,37 @@ function UpstreamView({
   onCreateProfile: () => void;
   onEditProfile: (profile: UpstreamProfile) => void;
   onOpenSettings: () => void;
-  onConnect: () => void;
-  onDisconnect: () => void;
   onConnectProfile: (profile: string) => void;
   onDisconnectProfile: (profile: string) => void;
 }) {
   const enabled = Boolean(status?.enabled);
-  const connected = Boolean(status?.connected);
   const hasProfile = profiles.length > 0;
+  const activeProfile = status?.active_profile ?? null;
   const connectionFor = (name: string) =>
     status?.connections.find((connection) => connection.profile === name);
+  const connectedNames = new Set(
+    (status?.connections ?? [])
+      .filter((connection) => connection.connected)
+      .map((connection) => connection.profile)
+  );
+  // Default profile first, then whatever else is currently connected, then
+  // the rest in the order they were added -- Array.sort is stable, so a
+  // rank-only comparator preserves each group's original relative order.
+  const rank = (profile: UpstreamProfile) => {
+    if (profile.name === activeProfile) {
+      return 0;
+    }
+    return connectedNames.has(profile.name) ? 1 : 2;
+  };
+  const sortedProfiles = [...profiles].sort((a, b) => rank(a) - rank(b));
+
   return (
-    <div className="view-stack">
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Status</h2>
-        </div>
-        <div className="facts">
-          <Fact label="Enabled" value={status?.enabled ? "yes" : "no"} />
-          <Fact label="Connected" value={connected ? "yes" : "no"} />
-          <Fact label="Active profile" value={status?.active_profile ?? ""} />
-          <Fact label="Interface" value={status?.interface ?? ""} />
-          {connected && (
-            <>
-              <Fact label="Local address" value={status?.local_ip ?? ""} />
-              <Fact label="Remote" value={status?.remote ?? ""} />
-            </>
-          )}
-        </div>
-        <div className="panel-footer">
+    <section className="panel upstream-profiles-panel">
+      <div className="panel-header">
+        <h2>Profiles</h2>
+        <div className="toolbar">
+          <Pill kind={enabled ? "ok" : "muted"}>{enabled ? "Upstream enabled" : "Upstream disabled"}</Pill>
           <ActionButton label="Settings" icon={Settings} onClick={onOpenSettings} />
-          {connected ? (
-            <ActionButton
-              label="Disconnect"
-              icon={Unplug}
-              busy={busy === "disconnect-upstream"}
-              onClick={onDisconnect}
-            />
-          ) : (
-            <ActionButton
-              label="Connect"
-              icon={RadioTower}
-              disabled={!enabled || !status?.active_profile}
-              busy={busy === "connect-upstream"}
-              onClick={onConnect}
-            />
-          )}
           <ActionButton
             label={enabled ? "Disable" : "Enable"}
             icon={Power}
@@ -5653,94 +5642,103 @@ function UpstreamView({
             busy={busy === "upstream-settings"}
             onClick={() => onSetEnabled(!enabled)}
           />
-        </div>
-      </section>
-      <section className="panel upstream-profiles-panel">
-        <div className="panel-header">
-          <h2>Profiles</h2>
           <ActionButton label="Create profile" icon={Plus} onClick={onCreateProfile} />
         </div>
-        <Table
-          columns={["Name", "Server", "Interface", "Connection", "Check host", "Actions"]}
-          empty="No profiles"
-        >
-          {profiles.map((profile) => {
+      </div>
+      {!hasProfile ? (
+        <EmptyState text="No profiles yet -- create one to get started" />
+      ) : (
+        <div className="profile-cards">
+          {sortedProfiles.map((profile) => {
             const connection = connectionFor(profile.name);
             const profileConnected = Boolean(connection?.connected);
+            const isDefault = profile.name === activeProfile;
             return (
-              <tr key={profile.name}>
-                <td>{profile.name}</td>
-                <td>{`${profile.server}:${profile.port}`}</td>
-                <td>{connection?.interface ?? profile.interface ?? ""}</td>
-                <td>
+              <article
+                key={profile.name}
+                className={`profile-card${isDefault ? " is-default" : ""}`}
+              >
+                <div className="profile-card-header">
+                  <div className="profile-card-name">
+                    <span>{profile.name}</span>
+                    {isDefault && <Pill kind="ok">Default</Pill>}
+                  </div>
                   {!profile.enabled ? (
                     <Pill kind="muted">disabled</Pill>
                   ) : profileConnected ? (
-                    <Pill kind="ok">{connection?.local_ip ?? "connected"}</Pill>
+                    <Pill kind="ok">connected</Pill>
                   ) : (
                     <Pill kind="muted">down</Pill>
                   )}
-                </td>
-                <td>{profile.check_host ?? ""}</td>
-                <td>
-                  <div className="toolbar">
+                </div>
+                <div className="profile-card-meta">
+                  <span>{`${profile.server}:${profile.port}`}</span>
+                  <span>{`Interface: ${connection?.interface ?? profile.interface ?? "auto"}`}</span>
+                  {profileConnected && (
+                    <>
+                      <span>{`Internal IP: ${connection?.local_ip ?? "-"}`}</span>
+                      <span>{`External IP: ${connection?.remote ?? "-"}`}</span>
+                    </>
+                  )}
+                </div>
+                <div className="profile-card-footer toolbar">
+                  {profileConnected ? (
                     <ActionButton
-                      label={status?.active_profile === profile.name ? "Active" : "Switch"}
-                      icon={status?.active_profile === profile.name ? CheckCircle2 : RadioTower}
-                      disabled={status?.active_profile === profile.name || !profile.enabled}
-                      busy={busy === `switch-${profile.name}`}
-                      title="Make this profile active: redirection rules re-point to its tunnel, connections stay up"
-                      onClick={() => onSwitch(profile.name)}
+                      label="Disconnect"
+                      icon={Unplug}
+                      busy={busy === `upstream-profile-disconnect-${profile.name}`}
+                      onClick={() => onDisconnectProfile(profile.name)}
                     />
-                    <IconButton
-                      label={
-                        profile.enabled
-                          ? "Disable profile (stop watchdog, disconnect)"
-                          : "Enable profile (let watchdog dial it)"
-                      }
-                      icon={Power}
-                      danger={profile.enabled}
-                      busy={busy === `upstream-profile-enabled-${profile.name}`}
-                      onClick={() => onSetProfileEnabled(profile.name, !profile.enabled)}
+                  ) : (
+                    <ActionButton
+                      label="Connect"
+                      icon={RadioTower}
+                      disabled={!profile.enabled}
+                      busy={busy === `upstream-profile-connect-${profile.name}`}
+                      onClick={() => onConnectProfile(profile.name)}
                     />
-                    {profileConnected ? (
-                      <IconButton
-                        label="Disconnect profile"
-                        icon={Unplug}
-                        busy={busy === `upstream-profile-disconnect-${profile.name}`}
-                        onClick={() => onDisconnectProfile(profile.name)}
-                      />
-                    ) : (
-                      <IconButton
-                        label="Connect profile"
-                        icon={RadioTower}
-                        busy={busy === `upstream-profile-connect-${profile.name}`}
-                        onClick={() => onConnectProfile(profile.name)}
-                      />
-                    )}
-                    <IconButton
-                      label="Edit profile"
-                      icon={Pencil}
-                      onClick={() => onEditProfile(profile)}
-                    />
-                    <IconButton
-                      label="Delete profile"
-                      icon={Trash2}
-                      danger
-                      busy={busy === `upstream-profile-delete-${profile.name}`}
-                      onClick={() => onDeleteProfile(profile.name)}
-                    />
-                  </div>
-                </td>
-              </tr>
+                  )}
+                  <ActionButton
+                    label={isDefault ? "Default" : "Make default"}
+                    icon={isDefault ? CheckCircle2 : Star}
+                    disabled={isDefault || !profile.enabled}
+                    busy={busy === `switch-${profile.name}`}
+                    title="Make this profile the default: redirection rules re-point to its tunnel, connections stay up"
+                    onClick={() => onSwitch(profile.name)}
+                  />
+                  <IconButton
+                    label={
+                      profile.enabled
+                        ? "Disable profile (stop watchdog, disconnect)"
+                        : "Enable profile (let watchdog dial it)"
+                    }
+                    icon={Power}
+                    danger={profile.enabled}
+                    busy={busy === `upstream-profile-enabled-${profile.name}`}
+                    onClick={() => onSetProfileEnabled(profile.name, !profile.enabled)}
+                  />
+                  <IconButton
+                    label="Edit profile"
+                    icon={Pencil}
+                    onClick={() => onEditProfile(profile)}
+                  />
+                  <IconButton
+                    label="Delete profile"
+                    icon={Trash2}
+                    danger
+                    busy={busy === `upstream-profile-delete-${profile.name}`}
+                    onClick={() => onDeleteProfile(profile.name)}
+                  />
+                </div>
+              </article>
             );
           })}
-        </Table>
-      </section>
+        </div>
+      )}
       {commandOutput && (
         <LastCommandPanel title="Last upstream command" result={commandOutput} onClose={onClearCommand} />
       )}
-    </div>
+    </section>
   );
 }
 
@@ -5750,6 +5748,7 @@ function UpstreamSettingsDialog({
   checkThreshold,
   checkSettleSeconds,
   failover,
+  connectOnBoot,
   checkHost,
   hasActiveProfile,
   busy,
@@ -5758,6 +5757,7 @@ function UpstreamSettingsDialog({
   onCheckThresholdChange,
   onCheckSettleSecondsChange,
   onFailoverChange,
+  onConnectOnBootChange,
   onCheckHostChange,
   onClose,
   onSave
@@ -5767,6 +5767,7 @@ function UpstreamSettingsDialog({
   checkThreshold: number;
   checkSettleSeconds: number;
   failover: boolean;
+  connectOnBoot: boolean;
   checkHost: string;
   hasActiveProfile: boolean;
   busy: string | null;
@@ -5775,6 +5776,7 @@ function UpstreamSettingsDialog({
   onCheckThresholdChange: (value: number) => void;
   onCheckSettleSecondsChange: (value: number) => void;
   onFailoverChange: (value: boolean) => void;
+  onConnectOnBootChange: (value: boolean) => void;
   onCheckHostChange: (value: string) => void;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
@@ -5835,6 +5837,17 @@ function UpstreamSettingsDialog({
               type="checkbox"
             />
             <span>Failover</span>
+          </label>
+          <label
+            className="switch"
+            title="Whether the watchdog dials the selected profile on its own the first time it sees it down after the server/container starts. Off leaves upstream disconnected after a restart until an admin connects it manually -- once any connection succeeds, normal reconnect-on-failure resumes regardless of this flag."
+          >
+            <input
+              checked={connectOnBoot}
+              onChange={(event) => onConnectOnBootChange(event.target.checked)}
+              type="checkbox"
+            />
+            <span>Connect on startup</span>
           </label>
           <div className="modal-actions">
             <button className="primary-button" disabled={busy === "upstream-settings"} type="submit">
@@ -6051,22 +6064,80 @@ function UpstreamProfileDialog({
               placeholder={isEdit ? "leave blank to keep existing" : "optional"}
             />
           </label>
-          <label title="Route these specific CIDRs through this profile specifically, regardless of which profile is active/default. Leave blank to only carry traffic when this profile is active.">
-            <span>Target routes</span>
-            <textarea
-              value={draft.routes}
-              onChange={(event) => onDraftChange({ ...draft, routes: event.target.value })}
-              rows={3}
-            />
-          </label>
-          <label title="Route these specific domains through this profile specifically, regardless of which profile is active/default. Leave blank to only carry traffic when this profile is active.">
-            <span>Target domains</span>
-            <textarea
-              value={draft.domains}
-              onChange={(event) => onDraftChange({ ...draft, domains: event.target.value })}
-              rows={3}
-            />
-          </label>
+          <div className="profile-routing-group">
+            <label
+              className="switch"
+              title="Route these specific CIDRs/domains through this profile specifically, regardless of which profile is active/default. Leave off to only carry traffic when this profile is active."
+            >
+              <input
+                checked={draft.route_clients_enabled}
+                onChange={(event) =>
+                  onDraftChange({ ...draft, route_clients_enabled: event.target.checked })
+                }
+                type="checkbox"
+              />
+              <span>Route client traffic through this profile</span>
+            </label>
+            {draft.route_clients_enabled && (
+              <div className="settings-grid">
+                <label>
+                  <span>Client routes</span>
+                  <textarea
+                    value={draft.routes}
+                    onChange={(event) => onDraftChange({ ...draft, routes: event.target.value })}
+                    rows={3}
+                  />
+                </label>
+                <label>
+                  <span>Client domains</span>
+                  <textarea
+                    value={draft.domains}
+                    onChange={(event) => onDraftChange({ ...draft, domains: event.target.value })}
+                    rows={3}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
+          <div className="profile-routing-group">
+            <label
+              className="switch"
+              title="Route the server host's own traffic (not VPN clients) through this profile specifically, on its own subnet/domain lists -- independent of the client routing above and of the global Server-side routing host-traffic setting."
+            >
+              <input
+                checked={draft.route_host_enabled}
+                onChange={(event) =>
+                  onDraftChange({ ...draft, route_host_enabled: event.target.checked })
+                }
+                type="checkbox"
+              />
+              <span>Route host traffic through this profile</span>
+            </label>
+            {draft.route_host_enabled && (
+              <div className="settings-grid">
+                <label>
+                  <span>Host routes</span>
+                  <textarea
+                    value={draft.host_routes}
+                    onChange={(event) =>
+                      onDraftChange({ ...draft, host_routes: event.target.value })
+                    }
+                    rows={3}
+                  />
+                </label>
+                <label>
+                  <span>Host domains</span>
+                  <textarea
+                    value={draft.host_domains}
+                    onChange={(event) =>
+                      onDraftChange({ ...draft, host_domains: event.target.value })
+                    }
+                    rows={3}
+                  />
+                </label>
+              </div>
+            )}
+          </div>
           <label className="switch" title="Skip upstream certificate verification">
             <input
               checked={draft.trusted_cert}
@@ -8006,15 +8077,6 @@ function CertSourceField({
           placeholder={pathPlaceholder}
         />
       )}
-    </div>
-  );
-}
-
-function Fact({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="fact">
-      <span>{label}</span>
-      <strong>{value || "-"}</strong>
     </div>
   );
 }

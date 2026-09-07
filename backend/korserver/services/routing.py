@@ -47,6 +47,21 @@ class RoutingTarget:
     # the same way upstream_active already did for the single-target case.
     killswitch: bool
     profile: UpstreamProfileConfig | None
+    # Per-profile HOST routing (UpstreamProfileConfig.route_host_enabled):
+    # the host's own traffic matching these routes/domains is marked and
+    # sent through this target's own tunnel, on its own dedicated nft sets
+    # -- independent of routing.host_traffic/host_mode, which only ever
+    # covers the default target. Always empty/None for the default target;
+    # that one's host marking is handled separately in the template (see
+    # host_traffic_enabled/host_mode).
+    host_routes: list[str]
+    host_domains: list[str]
+    host_set_v4: str | None
+    host_set_v6: str | None
+
+    @property
+    def host_enabled(self) -> bool:
+        return bool(self.host_set_v4)
 
 
 class RoutingService:
@@ -190,6 +205,10 @@ class RoutingService:
                 domains=self.list_domains() if config.routing.mode == "split" else [],
                 killswitch=upstream_active,
                 profile=config.upstream.selected_profile(),
+                host_routes=[],
+                host_domains=[],
+                host_set_v4=None,
+                host_set_v6=None,
             )
         ]
         # Named per-profile targets only exist at all when upstream is
@@ -211,7 +230,13 @@ class RoutingService:
             # actually matters to nftables/ip rule.
             fwmark_width = len(config.routing.fwmark) - 2
             for profile in config.upstream.profiles:
-                if not profile.routes and not profile.domains:
+                client_active = profile.route_clients_enabled and (
+                    profile.routes or profile.domains
+                )
+                host_active = profile.route_host_enabled and (
+                    profile.host_routes or profile.host_domains
+                )
+                if not client_active and not host_active:
                     continue
                 # Derived from this profile's own fixed position in
                 # upstream.profiles (or its explicit routing_offset
@@ -231,10 +256,14 @@ class RoutingService:
                         set_v4=f"split_v4_{safe_name}",
                         set_v6=f"split_v6_{safe_name}",
                         mode="split",
-                        routes=profile.routes,
-                        domains=profile.domains,
+                        routes=profile.routes if profile.route_clients_enabled else [],
+                        domains=profile.domains if profile.route_clients_enabled else [],
                         killswitch=True,
                         profile=profile,
+                        host_routes=profile.host_routes if host_active else [],
+                        host_domains=profile.host_domains if host_active else [],
+                        host_set_v4=f"host_v4_{safe_name}" if host_active else None,
+                        host_set_v6=f"host_v6_{safe_name}" if host_active else None,
                     )
                 )
         return targets

@@ -591,6 +591,13 @@ def upstream_watch(
     # before the last one ever had a chance to prove itself, live-locking
     # into a connect/disconnect/reconnect loop every check_interval tick.
     settled_until = 0.0
+    # Tracks whether *this watchdog process* has ever seen a healthy
+    # connection. Gates upstream.connect_on_boot: while off and this is
+    # still False, the watchdog only observes -- it never dials on its own
+    # -- until an admin connects manually (from the panel/CLI) at least
+    # once. From then on it behaves exactly as if connect_on_boot were on,
+    # since "on boot" no longer applies once a connection has existed.
+    ever_connected = False
     while True:
         config = get_config()
         service = UpstreamService(config)
@@ -598,9 +605,12 @@ def upstream_watch(
             if service.selected_profile() is not None:
                 if service.is_healthy():
                     consecutive_failures = 0
+                    ever_connected = True
                     # The kernel drops the fwmark table's route whenever the
                     # tunnel device bounces; heal it while the tunnel is up.
                     service.ensure_policy_routing()
+                elif not config.upstream.connect_on_boot and not ever_connected:
+                    consecutive_failures = 0
                 elif time.monotonic() < settled_until:
                     pass
                 else:
@@ -608,6 +618,7 @@ def upstream_watch(
                     if consecutive_failures >= config.upstream.check_threshold:
                         if service.recover():
                             settled_until = time.monotonic() + config.upstream.check_settle_seconds
+                            ever_connected = True
                         consecutive_failures = 0
             else:
                 consecutive_failures = 0

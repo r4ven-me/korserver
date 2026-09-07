@@ -87,8 +87,12 @@ export type UpstreamProfile = {
   key_file?: string | null;
   server_cert_pin?: string | null;
   check_host?: string | null;
+  route_clients_enabled?: boolean;
   routes?: string[];
   domains?: string[];
+  route_host_enabled?: boolean;
+  host_routes?: string[];
+  host_domains?: string[];
   enabled: boolean;
 };
 
@@ -112,8 +116,14 @@ export type UpstreamProfileDraft = {
   // Route these specific CIDRs/domains through this profile specifically,
   // regardless of which profile is active/default. Newline/comma-separated
   // in the form, same convention as GroupPolicyDraft's routes/dns.
+  route_clients_enabled: boolean;
   routes: string;
   domains: string;
+  // Same idea, for the HOST's own traffic through this specific profile --
+  // independent toggle and lists.
+  route_host_enabled: boolean;
+  host_routes: string;
+  host_domains: string;
   enable: boolean;
   enabled: boolean;
 };
@@ -1062,6 +1072,7 @@ export function saveUpstreamSettings(
     check_threshold: number;
     check_settle_seconds: number;
     failover: boolean;
+    connect_on_boot: boolean;
   }
 ): Promise<{ status: string }> {
   return requestJson<{ status: string }>("/api/upstream/settings", token, {
@@ -1089,7 +1100,12 @@ export function saveUpstreamProfile(
       check_host: payload.check_host || null,
       camouflage_secret: payload.camouflage_secret || null,
       routes: payload.routes.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean),
-      domains: payload.domains.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean)
+      domains: payload.domains.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean),
+      host_routes: payload.host_routes.split(/[\n,]+/).map((item) => item.trim()).filter(Boolean),
+      host_domains: payload.host_domains
+        .split(/[\n,]+/)
+        .map((item) => item.trim())
+        .filter(Boolean)
     })
   });
 }

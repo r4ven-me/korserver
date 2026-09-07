@@ -35,6 +35,12 @@ class DnsmasqConfigRenderer(TemplateRenderer):
         named_targets_with_domains = [
             target for target in targets if target.name != "default" and target.domains
         ]
+        # Per-profile HOST domains (UpstreamProfileConfig.host_domains):
+        # same idea, fed into that target's own dedicated host_set_v4/v6
+        # instead of its client set_v4/v6.
+        named_targets_with_host_domains = [
+            target for target in targets if target.host_enabled and target.host_domains
+        ]
         context: dict[str, Any] = {
             "config": config,
             "upstream_dns": upstream_dns,
@@ -44,6 +50,7 @@ class DnsmasqConfigRenderer(TemplateRenderer):
             "split_dns_active": split_dns_active,
             "split_domains": RoutingService(config).list_domains() if split_dns_active else [],
             "named_targets_with_domains": named_targets_with_domains,
+            "named_targets_with_host_domains": named_targets_with_host_domains,
             "blocklist_conf": InternalDnsService(config).blocklist_conf_path(),
             "local_records": local_records,
         }

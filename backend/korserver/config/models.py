@@ -352,9 +352,22 @@ class UpstreamProfileConfig(StrictModel):
     # regardless of which profile is active/default. Distinct from
     # routing.split.routes/domains, which target whichever profile is
     # currently active. Gets its own fwmark/table/kill-switch, auto-derived
-    # -- see RoutingService.list_targets().
+    # -- see RoutingService.list_targets(). Only applied to CLIENT
+    # (VPN-subnet-forwarded) traffic when route_clients_enabled is set --
+    # default True so upgrading configs that already populated these lists
+    # keep working unchanged.
+    route_clients_enabled: bool = True
     routes: list[str] = Field(default_factory=list)
     domains: list[str] = Field(default_factory=list)
+    # Same idea as routes/domains above, but for the HOST's own traffic
+    # routed through this specific profile -- independent toggle and lists,
+    # since an admin may want a profile to carry client traffic, host
+    # traffic, or both, on entirely different route/domain sets. New in this
+    # release, so no compatibility default needed: off until explicitly
+    # enabled.
+    route_host_enabled: bool = False
+    host_routes: list[str] = Field(default_factory=list)
+    host_domains: list[str] = Field(default_factory=list)
     # Explicit override for the fwmark/table_id offset this profile's named
     # routing target uses (see RoutingService.list_targets()). Unset ->
     # derived from this profile's fixed position in upstream.profiles, the
@@ -385,6 +398,16 @@ class UpstreamProfileConfig(StrictModel):
     @field_validator("domains")
     @classmethod
     def validate_domains(cls, value: list[str]) -> list[str]:
+        return [_validate_domain(item) for item in value]
+
+    @field_validator("host_routes")
+    @classmethod
+    def validate_host_routes(cls, value: list[str]) -> list[str]:
+        return [_validate_cidr(item) for item in value]
+
+    @field_validator("host_domains")
+    @classmethod
+    def validate_host_domains(cls, value: list[str]) -> list[str]:
         return [_validate_domain(item) for item in value]
 
     @field_validator("check_host")
@@ -450,6 +473,13 @@ class UpstreamConfig(StrictModel):
     # a chance to stabilize (see UpstreamWatch in cli.py).
     check_settle_seconds: int = Field(default=15, ge=0)
     failover: bool = False
+    # Whether the watchdog should dial the selected profile on its own the
+    # first time it sees it down after the process starts (container/service
+    # boot). When off, upstream stays disconnected after a restart until an
+    # admin explicitly connects it -- once any connection succeeds, normal
+    # health-check-triggered reconnection resumes regardless of this flag
+    # (it only gates that very first dial). See UpstreamWatch in cli.py.
+    connect_on_boot: bool = True
     profiles: list[UpstreamProfileConfig] = Field(default_factory=list)
 
     @field_validator("interface")

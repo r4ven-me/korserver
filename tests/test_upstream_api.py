@@ -69,6 +69,52 @@ def test_upstream_settings_saves_check_settle_seconds(tmp_path: Path) -> None:
     assert saved["upstream"]["check_settle_seconds"] == 30
 
 
+def test_upstream_settings_saves_connect_on_boot(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/settings",
+        auth=("admin", "secret"),
+        json={"enabled": False, "connect_on_boot": False},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["upstream"]["connect_on_boot"] is False
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["connect_on_boot"] is False
+
+
+def test_upstream_profile_saves_host_routing_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "finance",
+            "server": "vpn.example.com",
+            "auth_type": "password",
+            "username": "user",
+            "password": "secret",
+            "route_clients_enabled": False,
+            "route_host_enabled": True,
+            "host_routes": ["10.90.0.0/16"],
+            "host_domains": ["finance-internal.corp"],
+            "enable": True,
+        },
+    )
+
+    assert response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    profile = saved["upstream"]["profiles"][0]
+    assert profile["route_clients_enabled"] is False
+    assert profile["route_host_enabled"] is True
+    assert profile["host_routes"] == ["10.90.0.0/16"]
+    assert profile["host_domains"] == ["finance-internal.corp"]
+
+
 def test_upstream_settings_response_masks_profile_camouflage_secret(tmp_path: Path) -> None:
     # Regression test: this endpoint's response used its own separate
     # exclude set (password/cert_pass/cert_file_base64/key_file_base64)

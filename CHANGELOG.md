@@ -8,13 +8,21 @@
   (`full`/`split`) route the server host's own traffic through upstream, decided
   separately from the client-facing `routing.mode`.
 - Per-upstream-profile targeted routes/domains: any `upstream.profiles[]` entry can list
-  its own `routes`/`domains` to route through that profile's tunnel specifically,
-  regardless of which profile is active -- each gets its own fwmark/table/kill-switch and
-  nftables set. Configurable from the Upstream tab's profile editor ("Target
-  routes"/"Target domains").
+  its own `routes`/`domains` to route CLIENT traffic through that profile's tunnel
+  specifically, regardless of which profile is active -- each gets its own
+  fwmark/table/kill-switch and nftables set. Gated by a new `route_clients_enabled`
+  toggle. Configurable from the Upstream tab's profile editor ("Client routes"/"Client
+  domains").
+- `upstream.profiles[].route_host_enabled`/`host_routes`/`host_domains`: the same idea for
+  the HOST's own traffic through a specific profile, on its own independent toggle and
+  route/domain lists -- a profile can carry client traffic, host traffic, or both, on
+  entirely different lists. New "Host routes"/"Host domains" fields in the profile editor.
 - `upstream.profiles[].routing_offset`: an optional explicit override for a profile's
   fwmark/table_id offset, for when the default (derived from the profile's position in
   `upstream.profiles`) needs to be pinned.
+- `upstream.connect_on_boot`: toggle (in the Upstream settings dialog) for whether the
+  watchdog dials the selected profile on its own the first time it sees it down after the
+  server starts, or waits for an admin to connect manually first.
 - Structured GUI control for `upstream.check_settle_seconds` (previously YAML-only).
 - `routing.split.routes_files`/`routes_urls` and `domains_files`/`domains_urls`: static,
   admin-configured external sources for split routes/domains, the same shape as
@@ -33,6 +41,14 @@
   exceptions) instead of a flat list of independent checkboxes/selects, with
   `main_interface`/fwmark/table id/nftables prefix moved into a collapsed "Advanced"
   block.
+- The Upstream tab now shows only the profile list, presented as cards, instead of a
+  separate Status panel plus a profile table: the default (active) profile always first,
+  then any profile with a live connection (showing its internal/external IP), then the
+  rest in the order they were added. Each card has Connect/Disconnect and Make default
+  actions; switching the default profile away from the current one now asks for
+  confirmation. Enabled/disabled and the overall Connect/Disconnect action collapse into
+  the profile cards themselves; check host and failover stay in the existing Settings
+  dialog alongside the new connect-on-boot toggle.
 
 ### Fixed
 

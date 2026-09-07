@@ -402,20 +402,55 @@ label span,
   overflow-wrap: anywhere;
 }
 
-.facts {
+.profile-cards {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+}
+
+.profile-card {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
   display: grid;
   gap: 12px;
-  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  padding: 14px 16px;
 }
 
-.fact {
-  border-left: 3px solid var(--accent);
-  padding: 2px 0 2px 12px;
+.profile-card.is-default {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
 }
 
-.fact strong {
-  display: block;
-  min-height: 24px;
+.profile-card-header {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.profile-card-name {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 15px;
+  font-weight: 800;
+  gap: 8px;
+  overflow-wrap: anywhere;
+}
+
+.profile-card-meta {
+  color: var(--muted);
+  display: grid;
+  font-size: 13px;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+
+.profile-card-footer {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
 }
 
 .split {
@@ -437,6 +472,14 @@ label span,
 
 .upstream-settings-grid .modal-actions {
   grid-column: 1 / -1;
+}
+
+.profile-routing-group {
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 10px;
+  grid-column: 1 / -1;
+  padding-top: 12px;
 }
 
 .form-submit-right {
@@ -1616,7 +1659,6 @@ code {
 
   .metric-grid,
   .split,
-  .facts,
   .inline-form,
   .compact-form,
   .cert-paths,

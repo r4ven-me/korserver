@@ -42,6 +42,8 @@ type MockOptions = {
   initialServerState?: "running" | "stopped";
   routingMode?: "full" | "split";
   upstreamEnabled?: boolean;
+  upstreamProfiles?: Array<Record<string, unknown>>;
+  upstreamStatus?: Record<string, unknown>;
 };
 
 async function mockApi(page: Page, options: MockOptions = {}) {
@@ -162,9 +164,10 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         connected: false,
         local_ip: null,
         remote: null,
-        connections: []
+        connections: [],
+        ...options.upstreamStatus
       },
-      "/api/upstream": [],
+      "/api/upstream": options.upstreamProfiles ?? [],
       "/api/upstream/settings": { status: "ok" },
       "/api/upstream/profiles": { status: "ok" },
       "/api/upstream/connect": commandResult,
@@ -310,7 +313,7 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
     ["Authentication", "Authentication methods"],
     ["Certificates", "Authority certificates"],
     ["Identity", "OIDC connector"],
-    ["Upstream", "Status"],
+    ["Upstream", "Profiles"],
     ["Internal DNS", "Internal DNS"],
     ["Web / API", "Web / API panel"],
     ["Advanced", "Persistent YAML"]
@@ -319,7 +322,7 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
   // Server-side routing settings (formerly their own "Routing" pill) now
-  // live inside the Upstream section, right below its Status/Profiles.
+  // live inside the Upstream section, right below its Profiles list.
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await expect(
     page.getByRole("heading", { name: "Server-side routing", exact: true })
@@ -499,9 +502,10 @@ test("creating an upstream profile sends its target routes/domains as arrays", a
   await page.getByLabel("Server", { exact: true }).fill("finance.example.com");
   await page.getByLabel("Username", { exact: true }).fill("finance-user");
   await page.getByLabel("Password", { exact: true }).fill("finance-pass");
-  await page.getByLabel("Target routes", { exact: true }).fill("10.50.0.0/16, 10.60.0.0/16");
+  await page.getByLabel("Route client traffic through this profile", { exact: true }).check();
+  await page.getByLabel("Client routes", { exact: true }).fill("10.50.0.0/16, 10.60.0.0/16");
   await page
-    .getByLabel("Target domains", { exact: true })
+    .getByLabel("Client domains", { exact: true })
     .fill("internal.example.com\ncorp.example.com");
   await page.getByRole("button", { name: "Save profile", exact: true }).click();
 
@@ -514,6 +518,163 @@ test("creating an upstream profile sends its target routes/domains as arrays", a
   expect(payload.name).toBe("finance");
   expect(payload.routes).toEqual(["10.50.0.0/16", "10.60.0.0/16"]);
   expect(payload.domains).toEqual(["internal.example.com", "corp.example.com"]);
+});
+
+test("creating an upstream profile can also target host traffic on its own route/domain lists", async ({
+  page
+}) => {
+  const mutations: MockOptions["mutations"] = [];
+  await mockApi(page, { mutations });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Create profile", exact: true }).click();
+
+  await page.getByLabel("Name", { exact: true }).fill("finance");
+  await page.getByLabel("Server", { exact: true }).fill("finance.example.com");
+  await page.getByLabel("Username", { exact: true }).fill("finance-user");
+  await page.getByLabel("Password", { exact: true }).fill("finance-pass");
+  // Client routing left off -- only host routing is exercised here.
+  await page.getByLabel("Route host traffic through this profile", { exact: true }).check();
+  await page.getByLabel("Host routes", { exact: true }).fill("10.90.0.0/16");
+  await page.getByLabel("Host domains", { exact: true }).fill("finance-internal.corp");
+  await page.getByRole("button", { name: "Save profile", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "New upstream profile" })).toHaveCount(0);
+  const saved = mutations.find(
+    (mutation) => mutation.method === "POST" && mutation.path === "/api/upstream/profiles"
+  );
+  expect(saved).toBeDefined();
+  const payload = JSON.parse(saved?.body ?? "{}");
+  expect(payload.route_host_enabled).toBe(true);
+  expect(payload.host_routes).toEqual(["10.90.0.0/16"]);
+  expect(payload.host_domains).toEqual(["finance-internal.corp"]);
+  // route_clients_enabled left at its default draft state (false, since
+  // this profile never had the client toggle checked).
+  expect(payload.route_clients_enabled).toBe(false);
+});
+
+test("profile cards list the default profile first, then connected profiles, then the rest in order", async ({
+  page
+}) => {
+  await mockApi(page, {
+    upstreamEnabled: true,
+    upstreamProfiles: [
+      {
+        name: "bravo",
+        server: "bravo.example.com",
+        port: "443",
+        auth_type: "password",
+        username: "user",
+        enabled: true
+      },
+      {
+        name: "alpha",
+        server: "alpha.example.com",
+        port: "443",
+        auth_type: "password",
+        username: "user",
+        enabled: true
+      },
+      {
+        name: "charlie",
+        server: "charlie.example.com",
+        port: "443",
+        auth_type: "password",
+        username: "user",
+        enabled: true
+      }
+    ],
+    upstreamStatus: {
+      active_profile: "alpha",
+      connections: [
+        { profile: "bravo", interface: "oc-up1", connected: false, local_ip: null, remote: null },
+        {
+          profile: "alpha",
+          interface: "oc-middle0",
+          connected: false,
+          local_ip: null,
+          remote: null
+        },
+        {
+          profile: "charlie",
+          interface: "oc-up2",
+          connected: true,
+          local_ip: "10.10.10.5",
+          remote: "203.0.113.9:443"
+        }
+      ]
+    }
+  });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+
+  const names = await page
+    .locator(".profile-card-name > span:first-child")
+    .allTextContents();
+  // alpha is the configured default (rank 0), charlie is connected despite
+  // not being default (rank 1), bravo is neither (rank 2, added 1st but
+  // still last since sort is by rank, not insertion order, across groups).
+  expect(names).toEqual(["alpha", "charlie", "bravo"]);
+
+  const charlieCard = page.locator(".profile-card", { hasText: "charlie" });
+  await expect(charlieCard.getByText("Internal IP: 10.10.10.5")).toBeVisible();
+  await expect(charlieCard.getByText("External IP: 203.0.113.9:443")).toBeVisible();
+  const alphaCard = page.locator(".profile-card", { hasText: "alpha" });
+  await expect(alphaCard.locator(".pill", { hasText: "Default" })).toBeVisible();
+});
+
+test("making a different profile default asks for confirmation before switching", async ({
+  page
+}) => {
+  const mutations: MockOptions["mutations"] = [];
+  await mockApi(page, {
+    mutations,
+    upstreamEnabled: true,
+    upstreamProfiles: [
+      {
+        name: "alpha",
+        server: "alpha.example.com",
+        port: "443",
+        auth_type: "password",
+        username: "user",
+        enabled: true
+      },
+      {
+        name: "bravo",
+        server: "bravo.example.com",
+        port: "443",
+        auth_type: "password",
+        username: "user",
+        enabled: true
+      }
+    ],
+    upstreamStatus: { active_profile: "alpha", connections: [] }
+  });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+
+  let dialogMessage = "";
+  page.once("dialog", (dialog) => {
+    dialogMessage = dialog.message();
+    void dialog.accept();
+  });
+  await page
+    .locator(".profile-card", { hasText: "bravo" })
+    .getByRole("button", { name: "Make default", exact: true })
+    .click();
+
+  expect(dialogMessage).toContain("bravo");
+  const saved = mutations.find(
+    (mutation) => mutation.method === "POST" && mutation.path === "/api/upstream/switch"
+  );
+  expect(saved).toBeDefined();
+  expect(JSON.parse(saved?.body ?? "{}").profile).toBe("bravo");
 });
 
 test("toggling host-traffic routing sends host_traffic/host_mode to the API", async ({
