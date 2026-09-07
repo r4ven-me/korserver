@@ -161,6 +161,7 @@ describe("saveRoutingSettings", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     await saveRoutingSettings("session", {
+      client_traffic: true,
       mode: "split",
       tunnel_dns: true,
       host_traffic: true,
@@ -174,7 +175,11 @@ describe("saveRoutingSettings", () => {
       routes_files: [],
       routes_urls: [],
       domains_files: [],
-      domains_urls: []
+      domains_urls: [],
+      host_routes_files: [],
+      host_routes_urls: [],
+      host_domains_files: [],
+      host_domains_urls: []
     });
 
     const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];

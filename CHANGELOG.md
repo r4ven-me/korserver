@@ -30,6 +30,15 @@
   caches them, merged in alongside the inline lists and the existing runtime-editable
   routes/domains files. New GUI fields and "Validate URL"/"Download & apply" actions in
   the Upstream settings dialog.
+- `routing.client_traffic`: toggle for whether a connected client's traffic is routed
+  through Upstream by default at all (governed by `routing.mode`) -- off leaves clients on
+  plain host NAT even with Upstream enabled, relying only on explicit per-profile
+  targeting. Defaults on for upgrade compatibility.
+- `routing.host_split`: a routes/domains list (inline, runtime-editable file, static
+  files, URLs -- same shape as `routing.split`) dedicated to the HOST's own traffic under
+  `routing.host_mode: split`, entirely separate from the client-facing `routing.split`
+  list it used to silently share. New "Host routes"/"Host domains" fields and their own
+  file/URL sources in the Upstream settings dialog, under "This host's own traffic".
 
 ### Changed
 
@@ -50,6 +59,8 @@
 
 ### Fixed
 
+- Toggle switches and the Save button in the Upstream profile/settings dialogs no longer
+  sit slightly out of line with the input fields and each other in their row.
 - VPN clients could connect successfully but get no network access at all through the
   tunnel on a Docker host whose `ip filter` FORWARD chain defaults to policy drop (recent
   Docker/Moby releases) and only accepts docker0-related traffic: under

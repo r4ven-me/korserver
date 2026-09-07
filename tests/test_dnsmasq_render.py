@@ -28,6 +28,33 @@ def test_dnsmasq_render_contains_domain_nftset(tmp_path: Path) -> None:
     assert "nftset=/example.com/4#inet#korserver_filter#split_v4" in rendered
 
 
+def test_dnsmasq_render_ignores_split_domains_when_client_traffic_is_off(
+    tmp_path: Path,
+) -> None:
+    # client_traffic off means the default target never marks client
+    # traffic through Upstream at all -- resolving domains into its set (or
+    # overriding their DNS server) would be a silent, pointless DNS change.
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {
+                "mode": "split",
+                "client_traffic": False,
+                "split": {
+                    "tunnel_dns": True,
+                    "domains": ["example.com"],
+                    "dnsmasq_listen": "10.10.10.1",
+                },
+            }
+        },
+        environ={},
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+
+    assert "example.com" not in rendered
+
+
 def test_dnsmasq_render_includes_domains_from_domains_file(tmp_path: Path) -> None:
     domains_file = tmp_path / "domains.txt"
     domains_file.write_text("panel-added.example\n", encoding="utf-8")
@@ -215,3 +242,43 @@ def test_dnsmasq_render_feeds_named_target_host_domains_into_their_own_host_set(
         "nftset=/finance-internal.corp/4#inet#korserver_filter#host_v4_finance,"
         "6#inet#korserver_filter#host_v6_finance" in rendered
     )
+
+
+def test_dnsmasq_render_feeds_host_split_domains_into_their_own_set(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {
+                "mode": "full",
+                "host_traffic": True,
+                "host_mode": "split",
+                "host_split": {"domains": ["intranet.example"]},
+            },
+        },
+        environ={},
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+
+    assert (
+        "nftset=/intranet.example/4#inet#korserver_filter#host_split_v4,"
+        "6#inet#korserver_filter#host_split_v6" in rendered
+    )
+
+
+def test_dnsmasq_render_ignores_host_split_domains_without_host_traffic(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {
+                "mode": "full",
+                "host_mode": "split",
+                "host_split": {"domains": ["intranet.example"]},
+            },
+        },
+        environ={},
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+
+    assert "intranet.example" not in rendered

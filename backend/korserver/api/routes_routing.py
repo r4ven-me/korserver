@@ -32,6 +32,7 @@ class ListUrlRefreshRequest(BaseModel):
 
 
 class RoutingSettingsRequest(BaseModel):
+    client_traffic: bool = True
     mode: str
     tunnel_dns: bool = False
     host_traffic: bool = False
@@ -46,6 +47,10 @@ class RoutingSettingsRequest(BaseModel):
     routes_urls: list[str] = Field(default_factory=list)
     domains_files: list[str] = Field(default_factory=list)
     domains_urls: list[str] = Field(default_factory=list)
+    host_routes_files: list[str] = Field(default_factory=list)
+    host_routes_urls: list[str] = Field(default_factory=list)
+    host_domains_files: list[str] = Field(default_factory=list)
+    host_domains_urls: list[str] = Field(default_factory=list)
 
 
 def command_results(
@@ -132,6 +137,110 @@ def refresh_domains_url(request: Request, payload: ListUrlRefreshRequest) -> dic
     }
 
 
+@router.get("/host-routes")
+def list_host_routes(request: Request) -> list[str]:
+    config: AppConfig = request.app.state.config
+    return RoutingService(config).list_host_routes()
+
+
+@router.put("/host-routes")
+def set_host_routes(
+    request: Request,
+    payload: ItemsRequest,
+) -> list[str]:
+    config: AppConfig = request.app.state.config
+    RoutingService(config).set_host_routes(payload.items)
+    return RoutingService(config).list_host_routes()
+
+
+@router.get("/host-routes/status")
+def host_routes_status(request: Request) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    service = RoutingService(config)
+    return {
+        "files": service.host_routes_files_status(),
+        "urls": service.host_routes_urls_status(),
+    }
+
+
+@router.post("/host-routes/refresh")
+def refresh_host_routes_url(
+    request: Request, payload: ListUrlRefreshRequest
+) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    if payload.url not in config.routing.host_split.routes_urls:
+        raise HTTPException(
+            status_code=400,
+            detail="url is not one of the saved routing.host_split.routes_urls; save it first",
+        )
+    result = RoutingService(config).refresh_host_route_url(payload.url, preview=payload.preview)
+    written: list[str] = []
+    if result.saved:
+        written = [str(path) for path in ConfigService().write_rendered_files(config)]
+    return {
+        "status": "previewed" if payload.preview else "refreshed",
+        "url": result.url,
+        "total_lines": result.total_lines,
+        "valid": result.valid,
+        "skipped": result.skipped,
+        "sample": result.sample,
+        "saved": result.saved,
+        "written": written,
+    }
+
+
+@router.get("/host-domains")
+def list_host_domains(request: Request) -> list[str]:
+    config: AppConfig = request.app.state.config
+    return RoutingService(config).list_host_domains()
+
+
+@router.put("/host-domains")
+def set_host_domains(
+    request: Request,
+    payload: ItemsRequest,
+) -> list[str]:
+    config: AppConfig = request.app.state.config
+    RoutingService(config).set_host_domains(payload.items)
+    return RoutingService(config).list_host_domains()
+
+
+@router.get("/host-domains/status")
+def host_domains_status(request: Request) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    service = RoutingService(config)
+    return {
+        "files": service.host_domains_files_status(),
+        "urls": service.host_domains_urls_status(),
+    }
+
+
+@router.post("/host-domains/refresh")
+def refresh_host_domains_url(
+    request: Request, payload: ListUrlRefreshRequest
+) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    if payload.url not in config.routing.host_split.domains_urls:
+        raise HTTPException(
+            status_code=400,
+            detail="url is not one of the saved routing.host_split.domains_urls; save it first",
+        )
+    result = RoutingService(config).refresh_host_domain_url(payload.url, preview=payload.preview)
+    written: list[str] = []
+    if result.saved:
+        written = [str(path) for path in ConfigService().write_rendered_files(config)]
+    return {
+        "status": "previewed" if payload.preview else "refreshed",
+        "url": result.url,
+        "total_lines": result.total_lines,
+        "valid": result.valid,
+        "skipped": result.skipped,
+        "sample": result.sample,
+        "saved": result.saved,
+        "written": written,
+    }
+
+
 @router.post("/settings")
 def save_routing_settings(
     request: Request,
@@ -148,11 +257,19 @@ def save_routing_settings(
         split["dnsmasq_listen"] = payload.dnsmasq_listen
     if payload.dnsmasq_port is not None:
         split["dnsmasq_port"] = payload.dnsmasq_port
+    host_split: dict[str, object] = {
+        "routes_files": payload.host_routes_files,
+        "routes_urls": payload.host_routes_urls,
+        "domains_files": payload.host_domains_files,
+        "domains_urls": payload.host_domains_urls,
+    }
     patch: dict[str, object] = {
+        "client_traffic": payload.client_traffic,
         "mode": payload.mode,
         "host_traffic": payload.host_traffic,
         "host_mode": payload.host_mode,
         "split": split,
+        "host_split": host_split,
     }
     if payload.main_interface is not None:
         patch["main_interface"] = payload.main_interface

@@ -53,6 +53,26 @@ table inet {{ filter_table }} {
 {% endif %}
 {% endfor %}
 
+{% if host_traffic_enabled and host_mode == "split" %}
+  # The HOST's own split-mode set -- deliberately separate from the
+  # client-facing default target's split_v4/v6 above, fed from
+  # routing.host_split's own routes/domains, not routing.split's.
+  set host_split_v4 {
+    type ipv4_addr
+    flags interval
+    auto-merge
+{% if host_split_routes %}
+    elements = { {{ host_split_routes | join(", ") }} }
+{% endif %}
+  }
+
+  set host_split_v6 {
+    type ipv6_addr
+    flags interval
+    auto-merge
+  }
+{% endif %}
+
   chain prerouting {
     type filter hook prerouting priority mangle; policy accept;
     # Rendered in target order (default first, then named per-profile
@@ -60,7 +80,11 @@ table inet {{ filter_table }} {
     # profile's own explicit routes/domains correctly take priority over
     # the default's blanket full-mode mark for the same traffic.
 {% for target in targets %}
-{% if target.mode == "split" %}
+{% if target.name == "default" and not client_traffic_enabled %}
+  {# Client traffic through Upstream is off by default (routing.client_traffic) --
+     this target's set stays populated (routing.host_mode: split shares it) but
+     never marks client/forwarded traffic. #}
+{% elif target.mode == "split" %}
     ip daddr @{{ target.set_v4 }} counter meta mark set {{ target.fwmark }}
     ip6 daddr @{{ target.set_v6 }} counter meta mark set {{ target.fwmark }}
 {% elif target.mode == "full" %}
@@ -95,8 +119,8 @@ table inet {{ filter_table }} {
     ct direction original ip daddr != {{ config.server.ipv4_network }} counter meta mark set {{ config.routing.fwmark }}
     ct direction original ip6 counter meta mark set {{ config.routing.fwmark }}
 {% else %}
-    ct direction original ip daddr != {{ config.server.ipv4_network }} ip daddr @split_v4 counter meta mark set {{ config.routing.fwmark }}
-    ct direction original ip6 daddr @split_v6 counter meta mark set {{ config.routing.fwmark }}
+    ct direction original ip daddr != {{ config.server.ipv4_network }} ip daddr @host_split_v4 counter meta mark set {{ config.routing.fwmark }}
+    ct direction original ip6 daddr @host_split_v6 counter meta mark set {{ config.routing.fwmark }}
 {% endif %}
 {% endif %}
     # Per-profile host routing (UpstreamProfileConfig.route_host_enabled):

@@ -632,7 +632,64 @@ class RoutingSplitConfig(StrictModel):
         return _validate_http_url_list(value, field_name="routing.split.domains_urls")
 
 
+class HostSplitConfig(StrictModel):
+    """Same shape as RoutingSplitConfig's routes/domains lists (inline,
+    runtime-editable file, static files, URLs), but for the HOST's own
+    traffic under routing.host_mode: split -- deliberately a separate list
+    from routing.split's, not shared, since an admin may want the host to
+    follow entirely different routes/domains than clients do. No
+    tunnel_dns/dnsmasq_listen/dnsmasq_port here: those are about clients
+    picking this server as their DNS, which has no host equivalent -- host
+    domains are just resolved via whatever DNS the host itself already
+    uses (see RoutingService.list_host_domains()).
+    """
+
+    routes_file: Path = Path("/var/lib/korserver/host-routes.txt")
+    domains_file: Path = Path("/var/lib/korserver/host-domains.txt")
+    routes: list[str] = Field(default_factory=list)
+    domains: list[str] = Field(default_factory=list)
+    routes_files: list[Path] = Field(default_factory=list)
+    routes_urls: list[str] = Field(default_factory=list)
+    domains_files: list[Path] = Field(default_factory=list)
+    domains_urls: list[str] = Field(default_factory=list)
+
+    @field_validator("routes")
+    @classmethod
+    def validate_routes(cls, value: list[str]) -> list[str]:
+        return [_validate_cidr(item) for item in value]
+
+    @field_validator("domains")
+    @classmethod
+    def validate_domains(cls, value: list[str]) -> list[str]:
+        return [_validate_domain(item) for item in value]
+
+    @field_validator("routes_files", "domains_files")
+    @classmethod
+    def validate_list_files(cls, value: list[Path]) -> list[Path]:
+        return _dedup_paths(value)
+
+    @field_validator("routes_urls")
+    @classmethod
+    def validate_routes_urls(cls, value: list[str]) -> list[str]:
+        return _validate_http_url_list(value, field_name="routing.host_split.routes_urls")
+
+    @field_validator("domains_urls")
+    @classmethod
+    def validate_domains_urls(cls, value: list[str]) -> list[str]:
+        return _validate_http_url_list(value, field_name="routing.host_split.domains_urls")
+
+
 class RoutingConfig(StrictModel):
+    # Whether a connected client's traffic is routed through Upstream by
+    # default at all (governed by `mode` below) when no profile claims it
+    # specifically via its own route_clients_enabled. Off leaves clients on
+    # plain host NAT even with Upstream enabled, relying only on explicit
+    # per-profile targeting. Defaults True (not False, unlike host_traffic)
+    # purely for upgrade compatibility: `mode` has always had an effect on
+    # its own until this toggle was introduced, so defaulting it off would
+    # silently stop routing client traffic for every already-configured
+    # deployment the moment they upgrade.
+    client_traffic: bool = True
     mode: Literal["full", "split"] = "full"
     # Route the server host's own traffic through upstream too: marks
     # host-originated packets in the nftables output hook, so the host
@@ -648,6 +705,7 @@ class RoutingConfig(StrictModel):
     table_id: int = Field(default=1201, ge=1)
     nft_prefix: str = "korserver"
     split: RoutingSplitConfig = Field(default_factory=RoutingSplitConfig)
+    host_split: HostSplitConfig = Field(default_factory=HostSplitConfig)
 
     @field_validator("nft_prefix")
     @classmethod

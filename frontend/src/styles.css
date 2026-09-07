@@ -742,12 +742,17 @@ textarea:focus {
 
 .settings-grid > .switch,
 .settings-grid > .mini-check {
-  margin-top: 21px;
+  align-self: center;
 }
 
 .settings-grid > .toggle-action {
   align-self: end;
   width: 100%;
+}
+
+.settings-grid > .modal-actions {
+  grid-column: 1 / -1;
+  margin-top: 6px;
 }
 
 .primary-button,

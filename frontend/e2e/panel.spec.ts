@@ -38,6 +38,8 @@ type MockOptions = {
   }>;
   routes?: string[];
   domains?: string[];
+  hostRoutes?: string[];
+  hostDomains?: string[];
   mutations?: Array<{ method: string; path: string; csrf: string | null; body: string | null }>;
   initialServerState?: "running" | "stopped";
   routingMode?: "full" | "split";
@@ -56,6 +58,8 @@ async function mockApi(page: Page, options: MockOptions = {}) {
   const sessions = options.sessions ?? [];
   const routes = options.routes ?? [];
   const domains = options.domains ?? [];
+  const hostRoutes = options.hostRoutes ?? [];
+  const hostDomains = options.hostDomains ?? [];
   const mutations = options.mutations ?? [];
   await page.route("**/healthz", (route) =>
     route.fulfill({ json: { status: "ok", version: "0.1.0" } })
@@ -130,6 +134,36 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         written: []
       },
       "/api/routing/domains/refresh": {
+        status: "refreshed",
+        url: "",
+        total_lines: 0,
+        valid: 0,
+        skipped: 0,
+        sample: [],
+        saved: true,
+        written: []
+      },
+      "/api/routing/host-routes":
+        method === "GET"
+          ? hostRoutes
+          : JSON.parse(route.request().postData() ?? "{}").items ?? [],
+      "/api/routing/host-domains":
+        method === "GET"
+          ? hostDomains
+          : JSON.parse(route.request().postData() ?? "{}").items ?? [],
+      "/api/routing/host-routes/status": { files: [], urls: [] },
+      "/api/routing/host-domains/status": { files: [], urls: [] },
+      "/api/routing/host-routes/refresh": {
+        status: "refreshed",
+        url: "",
+        total_lines: 0,
+        valid: 0,
+        skipped: 0,
+        sample: [],
+        saved: true,
+        written: []
+      },
+      "/api/routing/host-domains/refresh": {
         status: "refreshed",
         url: "",
         total_lines: 0,
@@ -708,4 +742,135 @@ test("toggling host-traffic routing sends host_traffic/host_mode to the API", as
   const payload = JSON.parse(saved?.body ?? "{}");
   expect(payload.host_traffic).toBe(true);
   expect(payload.host_mode).toBe("split");
+});
+
+test("host split routing saves to its own dedicated routes endpoint, not the client's", async ({
+  page
+}) => {
+  const mutations: MockOptions["mutations"] = [];
+  await mockApi(page, { mutations, upstreamEnabled: true });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+
+  // Host routes/domains fields only appear once host traffic + split mode
+  // are both on -- same progressive-disclosure pattern as the client's.
+  await expect(dialog.getByRole("heading", { name: "Host routes" })).toHaveCount(0);
+  await dialog
+    .locator("label")
+    .filter({ hasText: "Route this host" })
+    .locator("input")
+    .check();
+  await dialog
+    .locator("label")
+    .filter({ hasText: "Host mode" })
+    .locator("select")
+    .selectOption("split");
+
+  const hostRoutesPanel = dialog
+    .getByRole("heading", { name: "Host routes", exact: true })
+    .locator("../..");
+  await hostRoutesPanel.locator("textarea").fill("10.90.0.0/16");
+  // Saving triggers a PUT followed by a full state reload, which -- since
+  // the mock's /api/config never reflects host_traffic -- resets the draft
+  // and makes this whole panel disappear again; wait for the PUT response
+  // itself rather than any UI state that won't survive that reload.
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/routing/host-routes") && response.request().method() === "PUT"
+    ),
+    hostRoutesPanel.getByRole("button", { name: "Save", exact: true }).click()
+  ]);
+
+  const savedRoutes = mutations.find(
+    (mutation) => mutation.method === "PUT" && mutation.path === "/api/routing/host-routes"
+  );
+  expect(JSON.parse(savedRoutes?.body ?? "{}").items).toEqual(["10.90.0.0/16"]);
+  // Never touched the client's own routes endpoint.
+  expect(
+    mutations.some((mutation) => mutation.path === "/api/routing/routes" && mutation.method === "PUT")
+  ).toBe(false);
+});
+
+test("host split domains save to their own dedicated endpoint, not the client's", async ({
+  page
+}) => {
+  const mutations: MockOptions["mutations"] = [];
+  await mockApi(page, { mutations, upstreamEnabled: true });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+
+  await dialog
+    .locator("label")
+    .filter({ hasText: "Route this host" })
+    .locator("input")
+    .check();
+  await dialog
+    .locator("label")
+    .filter({ hasText: "Host mode" })
+    .locator("select")
+    .selectOption("split");
+
+  const hostDomainsPanel = dialog
+    .getByRole("heading", { name: "Host domains", exact: true })
+    .locator("../..");
+  await hostDomainsPanel.locator("textarea").fill("intranet.example");
+  await Promise.all([
+    page.waitForResponse(
+      (response) =>
+        response.url().includes("/api/routing/host-domains") &&
+        response.request().method() === "PUT"
+    ),
+    hostDomainsPanel.getByRole("button", { name: "Save", exact: true }).click()
+  ]);
+
+  const savedDomains = mutations.find(
+    (mutation) => mutation.method === "PUT" && mutation.path === "/api/routing/host-domains"
+  );
+  expect(JSON.parse(savedDomains?.body ?? "{}").items).toEqual(["intranet.example"]);
+  expect(
+    mutations.some(
+      (mutation) => mutation.path === "/api/routing/domains" && mutation.method === "PUT"
+    )
+  ).toBe(false);
+});
+
+test("turning off default client routing sends client_traffic: false", async ({ page }) => {
+  const mutations: MockOptions["mutations"] = [];
+  await mockApi(page, { mutations, upstreamEnabled: true });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+
+  // On by default -- Mode select starts visible.
+  await expect(
+    dialog.locator("label").filter({ hasText: "Mode" }).first().locator("select")
+  ).toBeVisible();
+  await dialog
+    .locator("label")
+    .filter({ hasText: "Route a client" })
+    .locator("input")
+    .uncheck();
+  // Unchecking hides the now-irrelevant Mode select.
+  await expect(
+    dialog.locator("label").filter({ hasText: "Mode" }).first().locator("select")
+  ).toHaveCount(0);
+  await dialog.getByRole("button", { name: "Save settings", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+
+  const saved = mutations.find(
+    (mutation) => mutation.method === "POST" && mutation.path === "/api/routing/settings"
+  );
+  expect(JSON.parse(saved?.body ?? "{}").client_traffic).toBe(false);
 });

@@ -38,9 +38,13 @@ class NftablesConfigRenderer(TemplateRenderer):
         return targets, outbound_interface, upstream_active
 
     def render(self, config: AppConfig, outbound_interface: str | None = None) -> str:
+        from korserver.services.routing import RoutingService
+
         targets, outbound_interface, upstream_active = self.resolve_targets(
             config, outbound_interface
         )
+        host_split_active = config.routing.host_traffic and config.routing.host_mode == "split"
+        routing_service = RoutingService(config)
 
         context: dict[str, Any] = {
             "config": config,
@@ -55,10 +59,22 @@ class NftablesConfigRenderer(TemplateRenderer):
             # upstream interface to police, so it's off entirely otherwise.
             # Host traffic (below) only ever follows the default target.
             "upstream_killswitch": upstream_active,
+            # Whether the default target's own client-facing marking rule
+            # (mode: full/split) is rendered at all -- off leaves clients on
+            # plain host NAT (relying only on explicit per-profile
+            # targeting) even though the default target's set stays
+            # populated (used by its own killswitch/masquerade context).
+            "client_traffic_enabled": config.routing.client_traffic,
             # Independent of the client-facing `mode`: host_mode picks
-            # full/split for the HOST's own traffic on its own terms.
+            # full/split for the HOST's own traffic on its own terms, off
+            # its own separate routing.host_split routes/domains -- NOT
+            # shared with the client-facing default target's set.
             "host_traffic_enabled": config.routing.host_traffic,
             "host_mode": config.routing.host_mode,
+            "host_split_routes": routing_service.list_host_routes() if host_split_active else [],
+            "host_split_domains": (
+                routing_service.list_host_domains() if host_split_active else []
+            ),
         }
         return self.render_template("nftables.nft.j2", context)
 

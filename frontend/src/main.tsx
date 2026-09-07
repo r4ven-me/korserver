@@ -79,6 +79,10 @@ import {
   fetchHealth,
   fetchGroups,
   fetchGroupConfig,
+  fetchHostDomains,
+  fetchHostDomainsStatus,
+  fetchHostRoutes,
+  fetchHostRoutesStatus,
   fetchIdentity,
   fetchInterfaceStats,
   fetchInternalDnsStatus,
@@ -111,6 +115,8 @@ import {
   refreshInternalDnsBlocklist,
   refreshRoutesUrl,
   refreshDomainsUrl,
+  refreshHostRoutesUrl,
+  refreshHostDomainsUrl,
   reloadServer,
   restartServer,
   renewLetsEncryptCertificate,
@@ -140,6 +146,8 @@ import {
   revokeCertificate,
   saveConfigSource,
   setDomains,
+  setHostDomains,
+  setHostRoutes,
   setOtp,
   setRoutes,
   setupTotp,
@@ -316,6 +324,10 @@ type AppState = {
   domains: string[];
   routesStatus: RoutingListStatus | null;
   domainsStatus: RoutingListStatus | null;
+  hostRoutes: string[];
+  hostDomains: string[];
+  hostRoutesStatus: RoutingListStatus | null;
+  hostDomainsStatus: RoutingListStatus | null;
   upstream: UpstreamStatus | null;
   upstreamProfiles: UpstreamProfile[];
   identity: IdentityStatus | null;
@@ -343,6 +355,10 @@ const emptyState: AppState = {
   domains: [],
   routesStatus: null,
   domainsStatus: null,
+  hostRoutes: [],
+  hostDomains: [],
+  hostRoutesStatus: null,
+  hostDomainsStatus: null,
   upstream: null,
   upstreamProfiles: [],
   identity: null,
@@ -517,6 +533,7 @@ function App() {
     keep_files: 5
   });
   const [routingDraft, setRoutingDraft] = useState({
+    clientTraffic: true,
     mode: "full",
     tunnelDns: false,
     hostTraffic: false,
@@ -530,7 +547,11 @@ function App() {
     routesFilesText: "",
     routesUrlsText: "",
     domainsFilesText: "",
-    domainsUrlsText: ""
+    domainsUrlsText: "",
+    hostRoutesFilesText: "",
+    hostRoutesUrlsText: "",
+    hostDomainsFilesText: "",
+    hostDomainsUrlsText: ""
   });
   const [internalDnsDraft, setInternalDnsDraft] = useState({
     enabled: false,
@@ -725,6 +746,10 @@ function App() {
             fetchDomains(token),
             fetchRoutesStatus(token),
             fetchDomainsStatus(token),
+            fetchHostRoutes(token),
+            fetchHostDomains(token),
+            fetchHostRoutesStatus(token),
+            fetchHostDomainsStatus(token),
             fetchIdentity(token),
             fetchInternalDnsStatus(token),
             fetchUpstreamStatus(token),
@@ -758,6 +783,10 @@ function App() {
           domains,
           routesStatus,
           domainsStatus,
+          hostRoutes,
+          hostDomains,
+          hostRoutesStatus,
+          hostDomainsStatus,
           identity,
           internalDns,
           upstream,
@@ -781,6 +810,10 @@ function App() {
           domains: settledValue(domains, current.domains),
           routesStatus: settledValue(routesStatus, current.routesStatus),
           domainsStatus: settledValue(domainsStatus, current.domainsStatus),
+          hostRoutes: settledValue(hostRoutes, current.hostRoutes),
+          hostDomains: settledValue(hostDomains, current.hostDomains),
+          hostRoutesStatus: settledValue(hostRoutesStatus, current.hostRoutesStatus),
+          hostDomainsStatus: settledValue(hostDomainsStatus, current.hostDomainsStatus),
           identity: settledValue(identity, current.identity),
           internalDns: settledValue(internalDns, current.internalDns),
           upstream: settledValue(upstream, current.upstream),
@@ -1263,6 +1296,7 @@ function App() {
   const handleSaveRoutingSettings = async () => {
     const result = await runAction("routing-settings", "Routing settings saved", (token) =>
       saveRoutingSettings(token, {
+        client_traffic: routingDraft.clientTraffic,
         mode: routingDraft.mode,
         tunnel_dns: routingDraft.tunnelDns,
         host_traffic: routingDraft.hostTraffic,
@@ -1276,11 +1310,39 @@ function App() {
         routes_files: splitLines(routingDraft.routesFilesText),
         routes_urls: splitLines(routingDraft.routesUrlsText),
         domains_files: splitLines(routingDraft.domainsFilesText),
-        domains_urls: splitLines(routingDraft.domainsUrlsText)
+        domains_urls: splitLines(routingDraft.domainsUrlsText),
+        host_routes_files: splitLines(routingDraft.hostRoutesFilesText),
+        host_routes_urls: splitLines(routingDraft.hostRoutesUrlsText),
+        host_domains_files: splitLines(routingDraft.hostDomainsFilesText),
+        host_domains_urls: splitLines(routingDraft.hostDomainsUrlsText)
       })
     );
     if (result !== null) {
       recordCommand("routing", syntheticCommand(["korctl", "routing", "settings"], "saved"));
+    }
+  };
+
+  const handleSaveHostRoutes = async (items: string[]) => {
+    const result = await runAction("save-host-routes", "Host routes saved", (token) =>
+      setHostRoutes(token, items)
+    );
+    if (result !== null) {
+      recordCommand(
+        "routing",
+        syntheticCommand(["korctl", "host-routes", "set", ...items], "saved")
+      );
+    }
+  };
+
+  const handleSaveHostDomains = async (items: string[]) => {
+    const result = await runAction("save-host-domains", "Host domains saved", (token) =>
+      setHostDomains(token, items)
+    );
+    if (result !== null) {
+      recordCommand(
+        "routing",
+        syntheticCommand(["korctl", "host-domains", "set", ...items], "saved")
+      );
     }
   };
 
@@ -1316,6 +1378,54 @@ function App() {
     );
     if (result !== null) {
       const argv = ["korctl", "domains", "refresh", "--url", url];
+      if (preview) argv.push("--preview");
+      const sample = result.sample.length
+        ? `sample:\n  ${result.sample.join("\n  ")}`
+        : "sample: (empty)";
+      recordCommand(
+        "routing",
+        syntheticCommand(
+          argv,
+          [`url: ${result.url}`, `valid: ${result.valid}`, `skipped: ${result.skipped}`, sample].join(
+            "\n"
+          )
+        )
+      );
+    }
+  };
+
+  const handleRefreshHostRoutesUrl = async (url: string, preview: boolean) => {
+    const result = await runAction(
+      preview ? `host-routes-preview-${url}` : `host-routes-refresh-${url}`,
+      preview ? "Host route URL validated" : "Host route list downloaded and applied",
+      (token) => refreshHostRoutesUrl(token, url, preview)
+    );
+    if (result !== null) {
+      const argv = ["korctl", "host-routes", "refresh", "--url", url];
+      if (preview) argv.push("--preview");
+      const sample = result.sample.length
+        ? `sample:\n  ${result.sample.join("\n  ")}`
+        : "sample: (empty)";
+      recordCommand(
+        "routing",
+        syntheticCommand(
+          argv,
+          [`url: ${result.url}`, `valid: ${result.valid}`, `skipped: ${result.skipped}`, sample].join(
+            "\n"
+          )
+        )
+      );
+    }
+  };
+
+  const handleRefreshHostDomainsUrl = async (url: string, preview: boolean) => {
+    const result = await runAction(
+      preview ? `host-domains-preview-${url}` : `host-domains-refresh-${url}`,
+      preview ? "Host domain URL validated" : "Host domain list downloaded and applied",
+      (token) => refreshHostDomainsUrl(token, url, preview)
+    );
+    if (result !== null) {
+      const argv = ["korctl", "host-domains", "refresh", "--url", url];
       if (preview) argv.push("--preview");
       const sample = result.sample.length
         ? `sample:\n  ${result.sample.join("\n  ")}`
@@ -2363,6 +2473,10 @@ function App() {
             domains={state.domains}
             routesStatus={state.routesStatus}
             domainsStatus={state.domainsStatus}
+            hostRoutes={state.hostRoutes}
+            hostDomains={state.hostDomains}
+            hostRoutesStatus={state.hostRoutesStatus}
+            hostDomainsStatus={state.hostDomainsStatus}
             routingDraft={routingDraft}
             busy={busy}
             onInterfaceChange={setUpstreamInterface}
@@ -2379,6 +2493,12 @@ function App() {
             onRefreshRoutesUrl={(url) => void handleRefreshRoutesUrl(url, false)}
             onPreviewDomainsUrl={(url) => void handleRefreshDomainsUrl(url, true)}
             onRefreshDomainsUrl={(url) => void handleRefreshDomainsUrl(url, false)}
+            onSaveHostRoutes={(items) => void handleSaveHostRoutes(items)}
+            onSaveHostDomains={(items) => void handleSaveHostDomains(items)}
+            onPreviewHostRoutesUrl={(url) => void handleRefreshHostRoutesUrl(url, true)}
+            onRefreshHostRoutesUrl={(url) => void handleRefreshHostRoutesUrl(url, false)}
+            onPreviewHostDomainsUrl={(url) => void handleRefreshHostDomainsUrl(url, true)}
+            onRefreshHostDomainsUrl={(url) => void handleRefreshHostDomainsUrl(url, false)}
             onClose={() => setUpstreamSettingsModalOpen(false)}
             onSave={async (event) => {
               event.preventDefault();
@@ -3131,6 +3251,7 @@ function splitLines(value: string): string[] {
 }
 
 function readRoutingDraft(config: Record<string, unknown>): {
+  clientTraffic: boolean;
   mode: string;
   tunnelDns: boolean;
   hostTraffic: boolean;
@@ -3145,10 +3266,16 @@ function readRoutingDraft(config: Record<string, unknown>): {
   routesUrlsText: string;
   domainsFilesText: string;
   domainsUrlsText: string;
+  hostRoutesFilesText: string;
+  hostRoutesUrlsText: string;
+  hostDomainsFilesText: string;
+  hostDomainsUrlsText: string;
 } {
   const routing = readRecord(config.routing);
   const split = readRecord(routing.split);
+  const hostSplit = readRecord(routing.host_split);
   return {
+    clientTraffic: readBoolean(routing.client_traffic, true),
     mode: readString(routing.mode, "full"),
     tunnelDns: readBoolean(split.tunnel_dns, false),
     hostTraffic: readBoolean(routing.host_traffic, false),
@@ -3162,7 +3289,11 @@ function readRoutingDraft(config: Record<string, unknown>): {
     routesFilesText: readStringArray(split.routes_files).join("\n"),
     routesUrlsText: readStringArray(split.routes_urls).join("\n"),
     domainsFilesText: readStringArray(split.domains_files).join("\n"),
-    domainsUrlsText: readStringArray(split.domains_urls).join("\n")
+    domainsUrlsText: readStringArray(split.domains_urls).join("\n"),
+    hostRoutesFilesText: readStringArray(hostSplit.routes_files).join("\n"),
+    hostRoutesUrlsText: readStringArray(hostSplit.routes_urls).join("\n"),
+    hostDomainsFilesText: readStringArray(hostSplit.domains_files).join("\n"),
+    hostDomainsUrlsText: readStringArray(hostSplit.domains_urls).join("\n")
   };
 }
 
@@ -4307,6 +4438,7 @@ function SessionsView({
 }
 
 type RoutingDraft = {
+  clientTraffic: boolean;
   mode: string;
   tunnelDns: boolean;
   hostTraffic: boolean;
@@ -4321,6 +4453,10 @@ type RoutingDraft = {
   routesUrlsText: string;
   domainsFilesText: string;
   domainsUrlsText: string;
+  hostRoutesFilesText: string;
+  hostRoutesUrlsText: string;
+  hostDomainsFilesText: string;
+  hostDomainsUrlsText: string;
 };
 
 function RoutingListSourcesPanel({
@@ -5377,6 +5513,10 @@ function UpstreamSettingsDialog({
   domains,
   routesStatus,
   domainsStatus,
+  hostRoutes,
+  hostDomains,
+  hostRoutesStatus,
+  hostDomainsStatus,
   routingDraft,
   busy,
   onInterfaceChange,
@@ -5393,6 +5533,12 @@ function UpstreamSettingsDialog({
   onRefreshRoutesUrl,
   onPreviewDomainsUrl,
   onRefreshDomainsUrl,
+  onSaveHostRoutes,
+  onSaveHostDomains,
+  onPreviewHostRoutesUrl,
+  onRefreshHostRoutesUrl,
+  onPreviewHostDomainsUrl,
+  onRefreshHostDomainsUrl,
   onClose,
   onSave
 }: {
@@ -5409,6 +5555,10 @@ function UpstreamSettingsDialog({
   domains: string[];
   routesStatus: RoutingListStatus | null;
   domainsStatus: RoutingListStatus | null;
+  hostRoutes: string[];
+  hostDomains: string[];
+  hostRoutesStatus: RoutingListStatus | null;
+  hostDomainsStatus: RoutingListStatus | null;
   routingDraft: RoutingDraft;
   busy: string | null;
   onInterfaceChange: (value: string) => void;
@@ -5425,6 +5575,12 @@ function UpstreamSettingsDialog({
   onRefreshRoutesUrl: (url: string) => void;
   onPreviewDomainsUrl: (url: string) => void;
   onRefreshDomainsUrl: (url: string) => void;
+  onSaveHostRoutes: (items: string[]) => void;
+  onSaveHostDomains: (items: string[]) => void;
+  onPreviewHostRoutesUrl: (url: string) => void;
+  onRefreshHostRoutesUrl: (url: string) => void;
+  onPreviewHostDomainsUrl: (url: string) => void;
+  onRefreshHostDomainsUrl: (url: string) => void;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
 }) {
@@ -5507,7 +5663,7 @@ function UpstreamSettingsDialog({
                   onChange={(event) => onConnectOnBootChange(event.target.checked)}
                   type="checkbox"
                 />
-                <span>Connect on startup</span>
+                <span>Connect on boot</span>
               </label>
             </div>
           </div>
@@ -5551,6 +5707,81 @@ function UpstreamSettingsDialog({
                 </select>
               </label>
             )}
+            {routingDraft.hostTraffic && routingDraft.hostMode === "split" && (
+              <div className="routing-substep">
+                <p className="muted-line">
+                  Own list, separate from the client&rsquo;s below -- the host follows these
+                  routes/domains, not the client&rsquo;s.
+                </p>
+                <section className="split">
+                  <BulkListEditor
+                    title="Host routes"
+                    items={hostRoutes}
+                    placeholder={"10.30.0.0/16\n203.0.113.9"}
+                    busy={busy === "save-host-routes"}
+                    disabled={!upstreamEnabled}
+                    onSave={onSaveHostRoutes}
+                  />
+                  <BulkListEditor
+                    title="Host domains"
+                    items={hostDomains}
+                    placeholder={"intranet.example\ncorp-internal.example.com"}
+                    busy={busy === "save-host-domains"}
+                    disabled={!upstreamEnabled}
+                    onSave={onSaveHostDomains}
+                  />
+                </section>
+                <section className="split">
+                  <RoutingListSourcesPanel
+                    title="Host route sources"
+                    filesLabel="Host route files (one path per line)"
+                    filesPlaceholder={"/var/lib/korserver/extra-host-routes.txt"}
+                    urlsLabel="Host route URLs (one per line)"
+                    urlsPlaceholder={"https://lists.example.com/host-routes.txt"}
+                    disabled={!upstreamEnabled}
+                    filesText={routingDraft.hostRoutesFilesText}
+                    urlsText={routingDraft.hostRoutesUrlsText}
+                    status={hostRoutesStatus}
+                    busy={busy}
+                    busyKeyPrefix="host-routes"
+                    onFilesTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, hostRoutesFilesText: value })
+                    }
+                    onUrlsTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, hostRoutesUrlsText: value })
+                    }
+                    onPreviewUrl={onPreviewHostRoutesUrl}
+                    onRefreshUrl={onRefreshHostRoutesUrl}
+                  />
+                  <RoutingListSourcesPanel
+                    title="Host domain sources"
+                    filesLabel="Host domain files (one path per line)"
+                    filesPlaceholder={"/var/lib/korserver/extra-host-domains.txt"}
+                    urlsLabel="Host domain URLs (one per line)"
+                    urlsPlaceholder={"https://lists.example.com/host-domains.txt"}
+                    disabled={!upstreamEnabled}
+                    filesText={routingDraft.hostDomainsFilesText}
+                    urlsText={routingDraft.hostDomainsUrlsText}
+                    status={hostDomainsStatus}
+                    busy={busy}
+                    busyKeyPrefix="host-domains"
+                    onFilesTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, hostDomainsFilesText: value })
+                    }
+                    onUrlsTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, hostDomainsUrlsText: value })
+                    }
+                    onPreviewUrl={onPreviewHostDomainsUrl}
+                    onRefreshUrl={onRefreshHostDomainsUrl}
+                  />
+                </section>
+                <p className="muted-line">
+                  Host route/domain sources are saved together with the rest of this dialog
+                  (Save settings below) -- fill these in, click Save, then validate/download
+                  each URL.
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="routing-step">
@@ -5561,20 +5792,33 @@ function UpstreamSettingsDialog({
               toggles, in its edit dialog, always win over this).
               {!upstreamEnabled && " Inert until Upstream is enabled."}
             </p>
-            <label>
-              <span>Mode</span>
-              <select
+            <label className="switch">
+              <input
+                checked={routingDraft.clientTraffic}
                 disabled={!upstreamEnabled}
-                value={routingDraft.mode}
                 onChange={(event) =>
-                  onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
+                  onRoutingDraftChange({ ...routingDraft, clientTraffic: event.target.checked })
                 }
-              >
-                <option value="full">Full (all traffic via Upstream)</option>
-                <option value="split">Split (only listed traffic via Upstream)</option>
-              </select>
+                type="checkbox"
+              />
+              <span>Route a client&rsquo;s traffic through Upstream by default</span>
             </label>
-            {splitEnabled && (
+            {routingDraft.clientTraffic && (
+              <label>
+                <span>Mode</span>
+                <select
+                  disabled={!upstreamEnabled}
+                  value={routingDraft.mode}
+                  onChange={(event) =>
+                    onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
+                  }
+                >
+                  <option value="full">Full (all traffic via Upstream)</option>
+                  <option value="split">Split (only listed traffic via Upstream)</option>
+                </select>
+              </label>
+            )}
+            {routingDraft.clientTraffic && splitEnabled && (
               <div className="routing-substep">
                 <label
                   className="switch"

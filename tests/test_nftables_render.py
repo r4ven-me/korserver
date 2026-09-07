@@ -213,6 +213,94 @@ def test_killswitch_absent_when_upstream_disabled(tmp_path: Path) -> None:
     assert "drop" not in rendered
 
 
+def test_client_traffic_off_suppresses_default_target_marking_and_killswitch(
+    tmp_path: Path,
+) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {"mode": "full", "client_traffic": False},
+            "upstream": {"enabled": True, "profiles": [_upstream_profile()]},
+        },
+        environ={},
+    )
+
+    rendered = NftablesConfigRenderer().render(config)
+
+    assert f"counter meta mark set {config.routing.fwmark}" not in rendered
+    assert "drop" not in rendered
+    assert (
+        f'ip saddr {config.server.ipv4_network} meta mark {config.routing.fwmark} '
+        'oifname "oc-middle0" masquerade' not in rendered
+    )
+    # Plain NAT still applies -- clients aren't left without connectivity.
+    assert f"ip saddr {config.server.ipv4_network} masquerade" in rendered
+
+
+def test_client_traffic_off_does_not_affect_host_split_mode(tmp_path: Path) -> None:
+    # host_mode: split uses its own dedicated routing.host_split
+    # routes/domains and host_split_v4/v6 set -- entirely independent of
+    # client_traffic, which only ever gates the default target's own
+    # client-facing marking.
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {
+                "mode": "split",
+                "client_traffic": False,
+                "host_traffic": True,
+                "host_mode": "split",
+                "host_split": {"routes": ["192.168.25.0/24"]},
+            },
+            "upstream": {"enabled": True, "profiles": [_upstream_profile()]},
+        },
+        environ={},
+    )
+
+    rendered = NftablesConfigRenderer().render(config)
+
+    assert "192.168.25.0/24" in rendered
+    assert (
+        f"ct direction original ip daddr != {config.server.ipv4_network} "
+        f"ip daddr @host_split_v4 counter meta mark set {config.routing.fwmark}" in rendered
+    )
+    # No client-facing prerouting mark for the default target.
+    assert "\n    ip daddr @split_v4 counter meta mark set" not in rendered
+
+
+def test_host_split_mode_uses_its_own_list_not_the_clients(tmp_path: Path) -> None:
+    # Regression test: host_mode: split used to reuse the client-facing
+    # default target's own split_v4/v6 set (routing.split.routes/domains)
+    # -- an admin routing different subnets for host vs. clients would
+    # silently get the client's list applied to the host too. Now they're
+    # fully separate lists/sets.
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {
+                "mode": "split",
+                "host_traffic": True,
+                "host_mode": "split",
+                "split": {"routes": ["10.1.0.0/16"]},
+                "host_split": {"routes": ["10.2.0.0/16"]},
+            },
+            "upstream": {"enabled": True, "profiles": [_upstream_profile()]},
+        },
+        environ={},
+    )
+
+    rendered = NftablesConfigRenderer().render(config)
+
+    assert "set split_v4" in rendered
+    assert "10.1.0.0/16" in rendered
+    assert "set host_split_v4" in rendered
+    assert "10.2.0.0/16" in rendered
+    # The client set must not also contain the host's own CIDR (proves the
+    # two lists aren't merged into one set).
+    set_split_section = rendered.split("set split_v4 {")[1].split("}")[0]
+    assert "10.2.0.0/16" not in set_split_section
+
+
 def test_host_traffic_split_mode_adds_output_marking_and_killswitch(tmp_path: Path) -> None:
     config = load_config(
         tmp_path / "missing.yaml",
@@ -221,7 +309,7 @@ def test_host_traffic_split_mode_adds_output_marking_and_killswitch(tmp_path: Pa
                 "mode": "split",
                 "host_traffic": True,
                 "host_mode": "split",
-                "split": {"routes": ["192.168.25.0/24"]},
+                "host_split": {"routes": ["192.168.25.0/24"]},
             },
             "upstream": {"enabled": True, "profiles": [_upstream_profile()]},
         },
@@ -233,7 +321,7 @@ def test_host_traffic_split_mode_adds_output_marking_and_killswitch(tmp_path: Pa
     assert "type route hook output priority mangle" in rendered
     assert (
         f"ct direction original ip daddr != {config.server.ipv4_network} "
-        f"ip daddr @split_v4 counter meta mark set {config.routing.fwmark}" in rendered
+        f"ip daddr @host_split_v4 counter meta mark set {config.routing.fwmark}" in rendered
     )
     # The host kill-switch must be a postrouting chain: an output-hook
     # filter chain shares nf_hook_state with the route chain and still sees

@@ -42,6 +42,10 @@ nftset=/{{ domain }}/4#inet#{{ filter_table }}#{{ target.host_set_v4 }},6#inet#{
 {% endfor %}
 {% endfor %}
 
+{% for domain in host_split_domains %}
+nftset=/{{ domain }}/4#inet#{{ filter_table }}#host_split_v4,6#inet#{{ filter_table }}#host_split_v6
+{% endfor %}
+
 {% for record in local_records %}
 address=/{{ record.host }}/{{ record.ip }}
 {% endfor %}

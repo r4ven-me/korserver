@@ -761,6 +761,28 @@ export function setDomains(token: string, items: string[]): Promise<string[]> {
   });
 }
 
+export function fetchHostRoutes(token: string): Promise<string[]> {
+  return requestJson<string[]>("/api/routing/host-routes", token);
+}
+
+export function setHostRoutes(token: string, items: string[]): Promise<string[]> {
+  return requestJson<string[]>("/api/routing/host-routes", token, {
+    method: "PUT",
+    body: body({ items })
+  });
+}
+
+export function fetchHostDomains(token: string): Promise<string[]> {
+  return requestJson<string[]>("/api/routing/host-domains", token);
+}
+
+export function setHostDomains(token: string, items: string[]): Promise<string[]> {
+  return requestJson<string[]>("/api/routing/host-domains", token, {
+    method: "PUT",
+    body: body({ items })
+  });
+}
+
 export type RoutingListFileStatus = {
   path: string;
   exists: boolean;
@@ -824,9 +846,40 @@ export function refreshDomainsUrl(
   });
 }
 
+export function fetchHostRoutesStatus(token: string): Promise<RoutingListStatus> {
+  return requestJson<RoutingListStatus>("/api/routing/host-routes/status", token);
+}
+
+export function fetchHostDomainsStatus(token: string): Promise<RoutingListStatus> {
+  return requestJson<RoutingListStatus>("/api/routing/host-domains/status", token);
+}
+
+export function refreshHostRoutesUrl(
+  token: string,
+  url: string,
+  preview: boolean
+): Promise<RoutingListRefreshResult> {
+  return requestJson<RoutingListRefreshResult>("/api/routing/host-routes/refresh", token, {
+    method: "POST",
+    body: body({ url, preview })
+  });
+}
+
+export function refreshHostDomainsUrl(
+  token: string,
+  url: string,
+  preview: boolean
+): Promise<RoutingListRefreshResult> {
+  return requestJson<RoutingListRefreshResult>("/api/routing/host-domains/refresh", token, {
+    method: "POST",
+    body: body({ url, preview })
+  });
+}
+
 export function saveRoutingSettings(
   token: string,
   payload: {
+    client_traffic: boolean;
     mode: string;
     tunnel_dns: boolean;
     host_traffic: boolean;
@@ -841,6 +894,10 @@ export function saveRoutingSettings(
     routes_urls: string[];
     domains_files: string[];
     domains_urls: string[];
+    host_routes_files: string[];
+    host_routes_urls: string[];
+    host_domains_files: string[];
+    host_domains_urls: string[];
   }
 ): Promise<{ status: string }> {
   return requestJson<{ status: string }>("/api/routing/settings", token, {
