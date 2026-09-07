@@ -56,7 +56,6 @@ import { createRoot } from "react-dom/client";
 import {
   applyNft,
   changePassword,
-  cleanupNft,
   confirmTotp,
   connectUpstreamProfile,
   createCertificate,
@@ -86,7 +85,6 @@ import {
   fetchLog,
   fetchLogFiles,
   fetchLogRotationSettings,
-  fetchNft,
   fetchOtpQr,
   fetchOtpRecords,
   fetchP12,
@@ -113,7 +111,6 @@ import {
   refreshInternalDnsBlocklist,
   refreshRoutesUrl,
   refreshDomainsUrl,
-  reloadRouting,
   reloadServer,
   restartServer,
   renewLetsEncryptCertificate,
@@ -2338,61 +2335,6 @@ function App() {
                 setUpstreamSettingsModalOpen(true);
               }}
             />
-            <RoutingView
-              routes={state.routes}
-              domains={state.domains}
-              routesStatus={state.routesStatus}
-              domainsStatus={state.domainsStatus}
-              upstreamEnabled={Boolean(state.upstream?.enabled)}
-              routingDraft={routingDraft}
-              busy={busy}
-              commandOutput={commandOutputs.routing ?? null}
-              onClearCommand={() => clearCommand("routing")}
-              onRoutingDraftChange={setRoutingDraft}
-              onSaveRoutingSettings={() => void handleSaveRoutingSettings()}
-              onSaveRoutes={(items) => void handleSaveRoutes(items)}
-              onSaveDomains={(items) => void handleSaveDomains(items)}
-              onPreviewRoutesUrl={(url) => void handleRefreshRoutesUrl(url, true)}
-              onRefreshRoutesUrl={(url) => void handleRefreshRoutesUrl(url, false)}
-              onPreviewDomainsUrl={(url) => void handleRefreshDomainsUrl(url, true)}
-              onRefreshDomainsUrl={(url) => void handleRefreshDomainsUrl(url, false)}
-              onReloadRouting={async () => {
-                const result = await runAction(
-                  "reload-routing",
-                  "Routing reload requested",
-                  (token) => reloadRouting(token, dryRun),
-                  { dryRunAware: true }
-                );
-                recordCommand("routing", result);
-              }}
-              onApplyNft={async () => {
-                const result = await runAction(
-                  "apply-nft",
-                  "nftables rules applied",
-                  (token) => applyNft(token, dryRun),
-                  { dryRunAware: true }
-                );
-                recordCommand("routing", result);
-              }}
-              onCleanupNft={async () => {
-                if (!confirmAction("Remove korserver-managed nftables rules?")) {
-                  return;
-                }
-                const result = await runAction(
-                  "cleanup-nft",
-                  "nftables rules cleaned",
-                  (token) => cleanupNft(token, dryRun),
-                  { dryRunAware: true }
-                );
-                recordCommand("routing", result);
-              }}
-              onShowNft={async () => {
-                const result = await runAction("show-nft", "nftables state loaded", fetchNft, {
-                  reload: false
-                });
-                recordCommand("routing", result);
-              }}
-            />
           </div>
         )}
         {upstreamModalOpen && (
@@ -2416,6 +2358,12 @@ function App() {
             connectOnBoot={upstreamConnectOnBoot}
             checkHost={upstreamCheckHost}
             hasActiveProfile={Boolean(state.upstream?.active_profile)}
+            upstreamEnabled={Boolean(state.upstream?.enabled)}
+            routes={state.routes}
+            domains={state.domains}
+            routesStatus={state.routesStatus}
+            domainsStatus={state.domainsStatus}
+            routingDraft={routingDraft}
             busy={busy}
             onInterfaceChange={setUpstreamInterface}
             onCheckIntervalChange={setUpstreamCheckInterval}
@@ -2424,11 +2372,19 @@ function App() {
             onFailoverChange={setUpstreamFailover}
             onConnectOnBootChange={setUpstreamConnectOnBoot}
             onCheckHostChange={setUpstreamCheckHost}
+            onRoutingDraftChange={setRoutingDraft}
+            onSaveRoutes={(items) => void handleSaveRoutes(items)}
+            onSaveDomains={(items) => void handleSaveDomains(items)}
+            onPreviewRoutesUrl={(url) => void handleRefreshRoutesUrl(url, true)}
+            onRefreshRoutesUrl={(url) => void handleRefreshRoutesUrl(url, false)}
+            onPreviewDomainsUrl={(url) => void handleRefreshDomainsUrl(url, true)}
+            onRefreshDomainsUrl={(url) => void handleRefreshDomainsUrl(url, false)}
             onClose={() => setUpstreamSettingsModalOpen(false)}
             onSave={async (event) => {
               event.preventDefault();
               await handleSaveUpstreamSettings(Boolean(state.upstream?.enabled));
               await handleSaveUpstreamCheckHost();
+              await handleSaveRoutingSettings();
               setUpstreamSettingsModalOpen(false);
             }}
           />
@@ -4367,337 +4323,6 @@ type RoutingDraft = {
   domainsUrlsText: string;
 };
 
-function RoutingView({
-  routes,
-  domains,
-  routesStatus,
-  domainsStatus,
-  upstreamEnabled,
-  routingDraft,
-  busy,
-  commandOutput,
-  onClearCommand,
-  onRoutingDraftChange,
-  onSaveRoutingSettings,
-  onSaveRoutes,
-  onSaveDomains,
-  onPreviewRoutesUrl,
-  onRefreshRoutesUrl,
-  onPreviewDomainsUrl,
-  onRefreshDomainsUrl,
-  onReloadRouting,
-  onApplyNft,
-  onCleanupNft,
-  onShowNft
-}: {
-  routes: string[];
-  domains: string[];
-  routesStatus: RoutingListStatus | null;
-  domainsStatus: RoutingListStatus | null;
-  upstreamEnabled: boolean;
-  routingDraft: RoutingDraft;
-  busy: string | null;
-  commandOutput: CommandResult | CommandResult[] | null;
-  onClearCommand: () => void;
-  onRoutingDraftChange: (value: RoutingDraft) => void;
-  onSaveRoutingSettings: () => void;
-  onSaveRoutes: (items: string[]) => void;
-  onSaveDomains: (items: string[]) => void;
-  onPreviewRoutesUrl: (url: string) => void;
-  onRefreshRoutesUrl: (url: string) => void;
-  onPreviewDomainsUrl: (url: string) => void;
-  onRefreshDomainsUrl: (url: string) => void;
-  onReloadRouting: () => void;
-  onApplyNft: () => void;
-  onCleanupNft: () => void;
-  onShowNft: () => void;
-}) {
-  const splitEnabled = routingDraft.mode === "split";
-  // Domains only work if this server's own dnsmasq is the one resolving
-  // them (so it can tag the result into the split set) -- without that,
-  // the Domains list has no effect at all.
-  const splitDnsEnabled = splitEnabled && routingDraft.tunnelDns;
-  return (
-    <div className="view-stack">
-      <section className="panel routing-wizard">
-        <div className="panel-header">
-          <h2>Server-side routing</h2>
-        </div>
-        <p className="muted-line">
-          Three separate questions, in order: what the host itself does, what a client
-          gets by default, and whether any specific profile needs its own exception. Set
-          up as much of this as you like before Upstream is enabled above -- it just won't
-          do anything until then.
-        </p>
-        {!upstreamEnabled && (
-          <p className="muted-line">
-            <strong>Upstream is currently disabled.</strong> Clients get plain NAT through
-            the host regardless of the choices below.
-          </p>
-        )}
-
-        <div className="routing-step">
-          <h3>1. This host&rsquo;s own traffic</h3>
-          <p className="muted-line">
-            Independent of what clients get below -- does the server itself (not VPN
-            clients) send its own outbound traffic through Upstream too?
-          </p>
-          <label
-            className="switch"
-            title={!upstreamEnabled ? "Inert until Upstream is enabled above" : undefined}
-          >
-            <input
-              checked={routingDraft.hostTraffic}
-              disabled={!upstreamEnabled}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, hostTraffic: event.target.checked })
-              }
-              type="checkbox"
-            />
-            <span>Route this host&rsquo;s own traffic through Upstream</span>
-          </label>
-          {routingDraft.hostTraffic && (
-            <label
-              title={
-                routingDraft.hostMode === "full"
-                  ? "Caution: matches ALL host-originated traffic, which can also capture the outbound Upstream connection itself and cause a routing loop unless your network already routes that address another way. Prefer Split with a curated route list when precision matters."
-                  : undefined
-              }
-            >
-              <span>Host mode</span>
-              <select
-                disabled={!upstreamEnabled}
-                value={routingDraft.hostMode}
-                onChange={(event) =>
-                  onRoutingDraftChange({ ...routingDraft, hostMode: event.target.value })
-                }
-              >
-                <option value="full">Full (all host traffic)</option>
-                <option value="split">Split (only the routes/domains below)</option>
-              </select>
-            </label>
-          )}
-        </div>
-
-        <div className="routing-step">
-          <h3>2. A client&rsquo;s traffic, by default</h3>
-          <p className="muted-line">
-            What happens to a connected client&rsquo;s traffic once it leaves ocserv, when
-            no profile claims it specifically (step 3)?
-          </p>
-          <label title={!upstreamEnabled ? "Inert until Upstream is enabled above" : undefined}>
-            <span>Mode</span>
-            <select
-              disabled={!upstreamEnabled}
-              value={routingDraft.mode}
-              onChange={(event) =>
-                onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
-              }
-            >
-              <option value="full">Full (all traffic via Upstream)</option>
-              <option value="split">Split (only listed traffic via Upstream)</option>
-            </select>
-          </label>
-          {splitEnabled && (
-            <div className="routing-substep">
-              <label
-                className="switch"
-                title="Push this server's dnsmasq as the DNS for VPN clients and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → Internal DNS."
-              >
-                <input
-                  checked={routingDraft.tunnelDns}
-                  disabled={!upstreamEnabled}
-                  onChange={(event) =>
-                    onRoutingDraftChange({ ...routingDraft, tunnelDns: event.target.checked })
-                  }
-                  type="checkbox"
-                />
-                <span>Also split by domain (needs this server&rsquo;s own DNS)</span>
-              </label>
-              <section className="split">
-                <BulkListEditor
-                  title="Routes"
-                  items={routes}
-                  placeholder={"10.20.0.0/16\n203.0.113.5"}
-                  busy={busy === "save-routes"}
-                  disabled={!upstreamEnabled}
-                  onSave={onSaveRoutes}
-                />
-                {splitDnsEnabled && (
-                  <BulkListEditor
-                    title="Domains"
-                    items={domains}
-                    placeholder={"internal.example\ncorp.example.com"}
-                    busy={busy === "save-domains"}
-                    disabled={!upstreamEnabled}
-                    onSave={onSaveDomains}
-                  />
-                )}
-              </section>
-              <section className="split">
-                <RoutingListSourcesPanel
-                  title="Route sources"
-                  filesLabel="Route files (one path per line)"
-                  filesPlaceholder={"/var/lib/korserver/extra-routes.txt"}
-                  urlsLabel="Route URLs (one per line)"
-                  urlsPlaceholder={"https://lists.example.com/routes.txt"}
-                  disabled={!upstreamEnabled}
-                  filesText={routingDraft.routesFilesText}
-                  urlsText={routingDraft.routesUrlsText}
-                  status={routesStatus}
-                  busy={busy}
-                  busyKeyPrefix="routes"
-                  onFilesTextChange={(value) =>
-                    onRoutingDraftChange({ ...routingDraft, routesFilesText: value })
-                  }
-                  onUrlsTextChange={(value) =>
-                    onRoutingDraftChange({ ...routingDraft, routesUrlsText: value })
-                  }
-                  onPreviewUrl={onPreviewRoutesUrl}
-                  onRefreshUrl={onRefreshRoutesUrl}
-                />
-                {splitDnsEnabled && (
-                  <RoutingListSourcesPanel
-                    title="Domain sources"
-                    filesLabel="Domain files (one path per line)"
-                    filesPlaceholder={"/var/lib/korserver/extra-domains.txt"}
-                    urlsLabel="Domain URLs (one per line)"
-                    urlsPlaceholder={"https://lists.example.com/domains.txt"}
-                    disabled={!upstreamEnabled}
-                    filesText={routingDraft.domainsFilesText}
-                    urlsText={routingDraft.domainsUrlsText}
-                    status={domainsStatus}
-                    busy={busy}
-                    busyKeyPrefix="domains"
-                    onFilesTextChange={(value) =>
-                      onRoutingDraftChange({ ...routingDraft, domainsFilesText: value })
-                    }
-                    onUrlsTextChange={(value) =>
-                      onRoutingDraftChange({ ...routingDraft, domainsUrlsText: value })
-                    }
-                    onPreviewUrl={onPreviewDomainsUrl}
-                    onRefreshUrl={onRefreshDomainsUrl}
-                  />
-                )}
-              </section>
-              <p className="muted-line">
-                Route/domain sources are saved together with this whole section (Save
-                button below) -- fill these in, click Save, then validate/download each URL.
-              </p>
-            </div>
-          )}
-        </div>
-
-        <div className="routing-step">
-          <h3>3. A specific profile&rsquo;s exception</h3>
-          <p className="muted-line">
-            Need one particular kind of traffic -- client, host, or both -- to always use a
-            specific tunnel, regardless of which profile is active or what steps 1-2 say?
-            Edit that profile above and turn on its own client/host routing there. It gets
-            its own dedicated fwmark/table/kill-switch, layered on top of steps 1-2, not
-            instead of them.
-          </p>
-        </div>
-
-        <details className="rendered-file routing-advanced">
-          <summary>Advanced (rarely changed)</summary>
-          <div className="settings-grid">
-            <label>
-              <span>Main interface</span>
-              <input
-                value={routingDraft.mainInterface}
-                onChange={(event) =>
-                  onRoutingDraftChange({ ...routingDraft, mainInterface: event.target.value })
-                }
-                placeholder="auto"
-              />
-            </label>
-            <label>
-              <span>fwmark</span>
-              <input
-                value={routingDraft.fwmark}
-                onChange={(event) =>
-                  onRoutingDraftChange({ ...routingDraft, fwmark: event.target.value })
-                }
-              />
-            </label>
-            <label>
-              <span>Routing table id</span>
-              <input
-                type="number"
-                value={routingDraft.tableId}
-                onChange={(event) =>
-                  onRoutingDraftChange({
-                    ...routingDraft,
-                    tableId: Math.max(1, Number(event.target.value) || 1201)
-                  })
-                }
-              />
-            </label>
-            <label>
-              <span>nftables prefix</span>
-              <input
-                value={routingDraft.nftPrefix}
-                onChange={(event) =>
-                  onRoutingDraftChange({ ...routingDraft, nftPrefix: event.target.value })
-                }
-              />
-            </label>
-          </div>
-        </details>
-
-        <div className="panel-footer">
-          <ActionButton
-            label="Save"
-            icon={Save}
-            primary
-            busy={busy === "routing-settings"}
-            onClick={onSaveRoutingSettings}
-          />
-        </div>
-      </section>
-      <section className="panel">
-        <div className="panel-header">
-          <h2>nftables</h2>
-        </div>
-        {commandOutput ? (
-          <CommandBlock result={commandOutput} onClose={onClearCommand} />
-        ) : (
-          <EmptyState text="No command output" />
-        )}
-        <div className="panel-footer">
-          <ActionButton
-            label="Show"
-            icon={Terminal}
-            busy={busy === "show-nft"}
-            onClick={onShowNft}
-          />
-          <ActionButton
-            label="Reload"
-            icon={RefreshCw}
-            busy={busy === "reload-routing"}
-            onClick={onReloadRouting}
-          />
-          <ActionButton
-            label="Cleanup"
-            icon={Trash2}
-            danger
-            busy={busy === "cleanup-nft"}
-            onClick={onCleanupNft}
-          />
-          <ActionButton
-            label="Apply"
-            icon={Play}
-            primary
-            busy={busy === "apply-nft"}
-            onClick={onApplyNft}
-          />
-        </div>
-      </section>
-    </div>
-  );
-}
-
 function RoutingListSourcesPanel({
   title,
   filesLabel,
@@ -5645,24 +5270,23 @@ function UpstreamView({
           <ActionButton label="Create profile" icon={Plus} onClick={onCreateProfile} />
         </div>
       </div>
-      {!hasProfile ? (
-        <EmptyState text="No profiles yet -- create one to get started" />
-      ) : (
-        <div className="profile-cards">
-          {sortedProfiles.map((profile) => {
-            const connection = connectionFor(profile.name);
-            const profileConnected = Boolean(connection?.connected);
-            const isDefault = profile.name === activeProfile;
-            return (
-              <article
-                key={profile.name}
-                className={`profile-card${isDefault ? " is-default" : ""}`}
-              >
-                <div className="profile-card-header">
-                  <div className="profile-card-name">
-                    <span>{profile.name}</span>
-                    {isDefault && <Pill kind="ok">Default</Pill>}
-                  </div>
+      <Table columns={["Name", "Server", "Interface", "Status", "Actions"]} empty="No profiles yet">
+        {sortedProfiles.map((profile) => {
+          const connection = connectionFor(profile.name);
+          const profileConnected = Boolean(connection?.connected);
+          const isDefault = profile.name === activeProfile;
+          return (
+            <tr key={profile.name}>
+              <td className="strong-cell">
+                <div className="inline-tools">
+                  <span>{profile.name}</span>
+                  {isDefault && <Pill kind="ok">Default</Pill>}
+                </div>
+              </td>
+              <td>{`${profile.server}:${profile.port}`}</td>
+              <td>{connection?.interface ?? profile.interface ?? "auto"}</td>
+              <td>
+                <div className="upstream-status-cell">
                   {!profile.enabled ? (
                     <Pill kind="muted">disabled</Pill>
                   ) : profileConnected ? (
@@ -5670,27 +5294,24 @@ function UpstreamView({
                   ) : (
                     <Pill kind="muted">down</Pill>
                   )}
-                </div>
-                <div className="profile-card-meta">
-                  <span>{`${profile.server}:${profile.port}`}</span>
-                  <span>{`Interface: ${connection?.interface ?? profile.interface ?? "auto"}`}</span>
                   {profileConnected && (
-                    <>
-                      <span>{`Internal IP: ${connection?.local_ip ?? "-"}`}</span>
-                      <span>{`External IP: ${connection?.remote ?? "-"}`}</span>
-                    </>
+                    <span className="muted-line">
+                      {`Internal ${connection?.local_ip ?? "-"} / External ${connection?.remote ?? "-"}`}
+                    </span>
                   )}
                 </div>
-                <div className="profile-card-footer toolbar">
+              </td>
+              <td>
+                <div className="toolbar">
                   {profileConnected ? (
-                    <ActionButton
+                    <IconButton
                       label="Disconnect"
                       icon={Unplug}
                       busy={busy === `upstream-profile-disconnect-${profile.name}`}
                       onClick={() => onDisconnectProfile(profile.name)}
                     />
                   ) : (
-                    <ActionButton
+                    <IconButton
                       label="Connect"
                       icon={RadioTower}
                       disabled={!profile.enabled}
@@ -5730,11 +5351,11 @@ function UpstreamView({
                     onClick={() => onDeleteProfile(profile.name)}
                   />
                 </div>
-              </article>
-            );
-          })}
-        </div>
-      )}
+              </td>
+            </tr>
+          );
+        })}
+      </Table>
       {commandOutput && (
         <LastCommandPanel title="Last upstream command" result={commandOutput} onClose={onClearCommand} />
       )}
@@ -5751,6 +5372,12 @@ function UpstreamSettingsDialog({
   connectOnBoot,
   checkHost,
   hasActiveProfile,
+  upstreamEnabled,
+  routes,
+  domains,
+  routesStatus,
+  domainsStatus,
+  routingDraft,
   busy,
   onInterfaceChange,
   onCheckIntervalChange,
@@ -5759,6 +5386,13 @@ function UpstreamSettingsDialog({
   onFailoverChange,
   onConnectOnBootChange,
   onCheckHostChange,
+  onRoutingDraftChange,
+  onSaveRoutes,
+  onSaveDomains,
+  onPreviewRoutesUrl,
+  onRefreshRoutesUrl,
+  onPreviewDomainsUrl,
+  onRefreshDomainsUrl,
   onClose,
   onSave
 }: {
@@ -5770,6 +5404,12 @@ function UpstreamSettingsDialog({
   connectOnBoot: boolean;
   checkHost: string;
   hasActiveProfile: boolean;
+  upstreamEnabled: boolean;
+  routes: string[];
+  domains: string[];
+  routesStatus: RoutingListStatus | null;
+  domainsStatus: RoutingListStatus | null;
+  routingDraft: RoutingDraft;
   busy: string | null;
   onInterfaceChange: (value: string) => void;
   onCheckIntervalChange: (value: number) => void;
@@ -5778,79 +5418,306 @@ function UpstreamSettingsDialog({
   onFailoverChange: (value: boolean) => void;
   onConnectOnBootChange: (value: boolean) => void;
   onCheckHostChange: (value: string) => void;
+  onRoutingDraftChange: (value: RoutingDraft) => void;
+  onSaveRoutes: (items: string[]) => void;
+  onSaveDomains: (items: string[]) => void;
+  onPreviewRoutesUrl: (url: string) => void;
+  onRefreshRoutesUrl: (url: string) => void;
+  onPreviewDomainsUrl: (url: string) => void;
+  onRefreshDomainsUrl: (url: string) => void;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
 }) {
+  const splitEnabled = routingDraft.mode === "split";
+  const splitDnsEnabled = splitEnabled && routingDraft.tunnelDns;
   return (
     <div className="modal-backdrop" role="presentation">
-      <section className="modal-panel group-dialog" role="dialog" aria-modal="true">
+      <section className="modal-panel" role="dialog" aria-modal="true">
         <div className="panel-header">
           <h2>Upstream settings</h2>
           <IconButton label="Close" icon={X} onClick={onClose} />
         </div>
-        <form className="settings-grid upstream-settings-grid" onSubmit={onSave}>
-          <label>
-            <span>Interface</span>
-            <input value={upstreamInterface} onChange={(event) => onInterfaceChange(event.target.value)} />
-          </label>
-          <label title="Health-check target for the active profile">
-            <span>Check host</span>
-            <input
-              value={checkHost}
-              onChange={(event) => onCheckHostChange(event.target.value)}
-              placeholder="1.1.1.1"
-              disabled={!hasActiveProfile}
-            />
-          </label>
-          <label>
-            <span>Check interval (s)</span>
-            <input
-              type="number"
-              value={checkInterval}
-              onChange={(event) => onCheckIntervalChange(Math.max(1, Number(event.target.value) || 5))}
-            />
-          </label>
-          <label>
-            <span>Check threshold</span>
-            <input
-              type="number"
-              value={checkThreshold}
-              onChange={(event) =>
-                onCheckThresholdChange(Math.max(1, Number(event.target.value) || 3))
-              }
-            />
-          </label>
-          <label title="Grace window after a successful reconnect during which health-check failures aren't counted yet, so a still-settling tunnel can't immediately trigger another reconnect">
-            <span>Check settle (s)</span>
-            <input
-              type="number"
-              value={checkSettleSeconds}
-              onChange={(event) =>
-                onCheckSettleSecondsChange(Math.max(0, Number(event.target.value) || 0))
-              }
-            />
-          </label>
-          <label className="switch" title="When health checks fail, try the other configured profiles in turn (after reconnecting the active one first)">
-            <input
-              checked={failover}
-              onChange={(event) => onFailoverChange(event.target.checked)}
-              type="checkbox"
-            />
-            <span>Failover</span>
-          </label>
-          <label
-            className="switch"
-            title="Whether the watchdog dials the selected profile on its own the first time it sees it down after the server/container starts. Off leaves upstream disconnected after a restart until an admin connects it manually -- once any connection succeeds, normal reconnect-on-failure resumes regardless of this flag."
-          >
-            <input
-              checked={connectOnBoot}
-              onChange={(event) => onConnectOnBootChange(event.target.checked)}
-              type="checkbox"
-            />
-            <span>Connect on startup</span>
-          </label>
+        <form className="upstream-settings-form" onSubmit={onSave}>
+          <div className="routing-step">
+            <h3>Connection health</h3>
+            <div className="settings-grid">
+              <label>
+                <span>Interface</span>
+                <input
+                  value={upstreamInterface}
+                  onChange={(event) => onInterfaceChange(event.target.value)}
+                />
+              </label>
+              <label title="Health-check target for the active profile">
+                <span>Check host</span>
+                <input
+                  value={checkHost}
+                  onChange={(event) => onCheckHostChange(event.target.value)}
+                  placeholder="1.1.1.1"
+                  disabled={!hasActiveProfile}
+                />
+              </label>
+              <label>
+                <span>Check interval (s)</span>
+                <input
+                  type="number"
+                  value={checkInterval}
+                  onChange={(event) =>
+                    onCheckIntervalChange(Math.max(1, Number(event.target.value) || 5))
+                  }
+                />
+              </label>
+              <label>
+                <span>Check threshold</span>
+                <input
+                  type="number"
+                  value={checkThreshold}
+                  onChange={(event) =>
+                    onCheckThresholdChange(Math.max(1, Number(event.target.value) || 3))
+                  }
+                />
+              </label>
+              <label title="Grace window after a successful reconnect during which health-check failures aren't counted yet, so a still-settling tunnel can't immediately trigger another reconnect">
+                <span>Check settle (s)</span>
+                <input
+                  type="number"
+                  value={checkSettleSeconds}
+                  onChange={(event) =>
+                    onCheckSettleSecondsChange(Math.max(0, Number(event.target.value) || 0))
+                  }
+                />
+              </label>
+              <label
+                className="switch"
+                title="When health checks fail, try the other configured profiles in turn (after reconnecting the active one first)"
+              >
+                <input
+                  checked={failover}
+                  onChange={(event) => onFailoverChange(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Failover</span>
+              </label>
+              <label
+                className="switch"
+                title="Whether the watchdog dials the selected profile on its own the first time it sees it down after the server/container starts. Off leaves upstream disconnected after a restart until an admin connects it manually -- once any connection succeeds, normal reconnect-on-failure resumes regardless of this flag."
+              >
+                <input
+                  checked={connectOnBoot}
+                  onChange={(event) => onConnectOnBootChange(event.target.checked)}
+                  type="checkbox"
+                />
+                <span>Connect on startup</span>
+              </label>
+            </div>
+          </div>
+
+          <div className="routing-step">
+            <h3>This host&rsquo;s own traffic</h3>
+            <p className="muted-line">
+              Independent of what clients get below -- does the server itself (not VPN
+              clients) send its own outbound traffic through Upstream too?
+              {!upstreamEnabled && " Inert until Upstream is enabled."}
+            </p>
+            <label className="switch">
+              <input
+                checked={routingDraft.hostTraffic}
+                disabled={!upstreamEnabled}
+                onChange={(event) =>
+                  onRoutingDraftChange({ ...routingDraft, hostTraffic: event.target.checked })
+                }
+                type="checkbox"
+              />
+              <span>Route this host&rsquo;s own traffic through Upstream</span>
+            </label>
+            {routingDraft.hostTraffic && (
+              <label
+                title={
+                  routingDraft.hostMode === "full"
+                    ? "Caution: matches ALL host-originated traffic, which can also capture the outbound Upstream connection itself and cause a routing loop unless your network already routes that address another way. Prefer Split with a curated route list when precision matters."
+                    : undefined
+                }
+              >
+                <span>Host mode</span>
+                <select
+                  disabled={!upstreamEnabled}
+                  value={routingDraft.hostMode}
+                  onChange={(event) =>
+                    onRoutingDraftChange({ ...routingDraft, hostMode: event.target.value })
+                  }
+                >
+                  <option value="full">Full (all host traffic)</option>
+                  <option value="split">Split (only the routes/domains below)</option>
+                </select>
+              </label>
+            )}
+          </div>
+
+          <div className="routing-step">
+            <h3>A client&rsquo;s traffic, by default</h3>
+            <p className="muted-line">
+              What happens to a connected client&rsquo;s traffic once it leaves ocserv, when
+              no profile claims it specifically (a profile&rsquo;s own client/host routing
+              toggles, in its edit dialog, always win over this).
+              {!upstreamEnabled && " Inert until Upstream is enabled."}
+            </p>
+            <label>
+              <span>Mode</span>
+              <select
+                disabled={!upstreamEnabled}
+                value={routingDraft.mode}
+                onChange={(event) =>
+                  onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
+                }
+              >
+                <option value="full">Full (all traffic via Upstream)</option>
+                <option value="split">Split (only listed traffic via Upstream)</option>
+              </select>
+            </label>
+            {splitEnabled && (
+              <div className="routing-substep">
+                <label
+                  className="switch"
+                  title="Push this server's dnsmasq as the DNS for VPN clients and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → Internal DNS."
+                >
+                  <input
+                    checked={routingDraft.tunnelDns}
+                    disabled={!upstreamEnabled}
+                    onChange={(event) =>
+                      onRoutingDraftChange({ ...routingDraft, tunnelDns: event.target.checked })
+                    }
+                    type="checkbox"
+                  />
+                  <span>Also split by domain (needs this server&rsquo;s own DNS)</span>
+                </label>
+                <section className="split">
+                  <BulkListEditor
+                    title="Routes"
+                    items={routes}
+                    placeholder={"10.20.0.0/16\n203.0.113.5"}
+                    busy={busy === "save-routes"}
+                    disabled={!upstreamEnabled}
+                    onSave={onSaveRoutes}
+                  />
+                  {splitDnsEnabled && (
+                    <BulkListEditor
+                      title="Domains"
+                      items={domains}
+                      placeholder={"internal.example\ncorp.example.com"}
+                      busy={busy === "save-domains"}
+                      disabled={!upstreamEnabled}
+                      onSave={onSaveDomains}
+                    />
+                  )}
+                </section>
+                <section className="split">
+                  <RoutingListSourcesPanel
+                    title="Route sources"
+                    filesLabel="Route files (one path per line)"
+                    filesPlaceholder={"/var/lib/korserver/extra-routes.txt"}
+                    urlsLabel="Route URLs (one per line)"
+                    urlsPlaceholder={"https://lists.example.com/routes.txt"}
+                    disabled={!upstreamEnabled}
+                    filesText={routingDraft.routesFilesText}
+                    urlsText={routingDraft.routesUrlsText}
+                    status={routesStatus}
+                    busy={busy}
+                    busyKeyPrefix="routes"
+                    onFilesTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, routesFilesText: value })
+                    }
+                    onUrlsTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, routesUrlsText: value })
+                    }
+                    onPreviewUrl={onPreviewRoutesUrl}
+                    onRefreshUrl={onRefreshRoutesUrl}
+                  />
+                  {splitDnsEnabled && (
+                    <RoutingListSourcesPanel
+                      title="Domain sources"
+                      filesLabel="Domain files (one path per line)"
+                      filesPlaceholder={"/var/lib/korserver/extra-domains.txt"}
+                      urlsLabel="Domain URLs (one per line)"
+                      urlsPlaceholder={"https://lists.example.com/domains.txt"}
+                      disabled={!upstreamEnabled}
+                      filesText={routingDraft.domainsFilesText}
+                      urlsText={routingDraft.domainsUrlsText}
+                      status={domainsStatus}
+                      busy={busy}
+                      busyKeyPrefix="domains"
+                      onFilesTextChange={(value) =>
+                        onRoutingDraftChange({ ...routingDraft, domainsFilesText: value })
+                      }
+                      onUrlsTextChange={(value) =>
+                        onRoutingDraftChange({ ...routingDraft, domainsUrlsText: value })
+                      }
+                      onPreviewUrl={onPreviewDomainsUrl}
+                      onRefreshUrl={onRefreshDomainsUrl}
+                    />
+                  )}
+                </section>
+                <p className="muted-line">
+                  Route/domain sources are saved together with the rest of this dialog
+                  (Save settings below) -- fill these in, click Save, then validate/download
+                  each URL.
+                </p>
+              </div>
+            )}
+          </div>
+
+          <details className="rendered-file">
+            <summary>Advanced (rarely changed)</summary>
+            <div className="settings-grid">
+              <label>
+                <span>Main interface</span>
+                <input
+                  value={routingDraft.mainInterface}
+                  onChange={(event) =>
+                    onRoutingDraftChange({ ...routingDraft, mainInterface: event.target.value })
+                  }
+                  placeholder="auto"
+                />
+              </label>
+              <label>
+                <span>fwmark</span>
+                <input
+                  value={routingDraft.fwmark}
+                  onChange={(event) =>
+                    onRoutingDraftChange({ ...routingDraft, fwmark: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                <span>Routing table id</span>
+                <input
+                  type="number"
+                  value={routingDraft.tableId}
+                  onChange={(event) =>
+                    onRoutingDraftChange({
+                      ...routingDraft,
+                      tableId: Math.max(1, Number(event.target.value) || 1201)
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>nftables prefix</span>
+                <input
+                  value={routingDraft.nftPrefix}
+                  onChange={(event) =>
+                    onRoutingDraftChange({ ...routingDraft, nftPrefix: event.target.value })
+                  }
+                />
+              </label>
+            </div>
+          </details>
+
           <div className="modal-actions">
-            <button className="primary-button" disabled={busy === "upstream-settings"} type="submit">
+            <button
+              className="primary-button"
+              disabled={busy === "upstream-settings" || busy === "routing-settings"}
+              type="submit"
+            >
               <Save size={18} aria-hidden="true" />
               <span>Save settings</span>
             </button>

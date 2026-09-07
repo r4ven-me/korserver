@@ -321,18 +321,14 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
     await page.getByRole("button", { name: pill, exact: true }).click();
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
-  // Server-side routing settings (formerly their own "Routing" pill) now
-  // live inside the Upstream section, right below its Profiles list.
-  await page.getByRole("button", { name: "Upstream", exact: true }).click();
-  await expect(
-    page.getByRole("heading", { name: "Server-side routing", exact: true })
-  ).toBeVisible();
 });
 
-test("server-side routing controls are inert until Upstream is enabled", async ({ page }) => {
+test("server-side routing controls in Upstream settings are inert until Upstream is enabled", async ({
+  page
+}) => {
   // Regression test: routing.mode/host_traffic/host_mode and the Routes/
   // Domains lists have no effect at all while upstream.enabled is false
-  // (clients just get plain NAT through the host regardless) -- the panel
+  // (clients just get plain NAT through the host regardless) -- the dialog
   // used to leave them fully interactive anyway, inviting an admin to
   // "set" something that silently does nothing.
   await mockApi(page, { upstreamEnabled: false });
@@ -340,29 +336,28 @@ test("server-side routing controls are inert until Upstream is enabled", async (
 
   await page.getByRole("button", { name: "Config", exact: true }).click();
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
-  const routingPanel = page
-    .getByRole("heading", { name: "Server-side routing", exact: true })
-    .locator("../..");
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog");
 
   // Not getByLabel("Mode"): same select accessible-name-concatenation quirk
   // as "Host mode" below (label text + currently selected option text).
   await expect(
-    routingPanel.locator("label").filter({ hasText: "Mode" }).first().locator("select")
+    dialog.locator("label").filter({ hasText: "Mode" }).first().locator("select")
   ).toBeDisabled();
   await expect(
-    routingPanel.locator("label").filter({ hasText: "Route this host" }).locator("input")
+    dialog.locator("label").filter({ hasText: "Route this host" }).locator("input")
   ).toBeDisabled();
   // Host mode only appears once Host traffic is checked -- it can't be, so
   // it isn't rendered at all while Upstream is off.
   await expect(
-    routingPanel.locator("label").filter({ hasText: "Host mode" }).locator("select")
+    dialog.locator("label").filter({ hasText: "Host mode" }).locator("select")
   ).toHaveCount(0);
   // Infrastructure settings that matter regardless of Upstream (plain NAT
   // through the host uses main_interface/fwmark/table_id/nft_prefix too)
   // live under the collapsed "Advanced" details and stay editable.
-  await routingPanel.getByText("Advanced (rarely changed)").click();
-  await expect(routingPanel.getByLabel("Main interface", { exact: true })).toBeEnabled();
-  await expect(routingPanel.getByLabel("fwmark", { exact: true })).toBeEnabled();
+  await dialog.getByText("Advanced (rarely changed)").click();
+  await expect(dialog.getByLabel("Main interface", { exact: true })).toBeEnabled();
+  await expect(dialog.getByLabel("fwmark", { exact: true })).toBeEnabled();
 });
 
 test("shows the lazy xterm view only when terminal access is enabled", async ({ page }) => {
@@ -418,6 +413,7 @@ test("core management buttons call expected API endpoints with CSRF", async ({ p
 
   await page.getByRole("button", { name: "Config", exact: true }).click();
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
   const routesPanel = page.getByRole("heading", { name: "Routes", exact: true }).locator("../..");
   await routesPanel.locator("textarea").fill("10.30.0.0/16\n203.0.113.9");
   await routesPanel.getByRole("button", { name: "Save", exact: true }).click();
@@ -555,7 +551,7 @@ test("creating an upstream profile can also target host traffic on its own route
   expect(payload.route_clients_enabled).toBe(false);
 });
 
-test("profile cards list the default profile first, then connected profiles, then the rest in order", async ({
+test("profile list shows the default profile first, then connected profiles, then the rest in order", async ({
   page
 }) => {
   await mockApi(page, {
@@ -612,19 +608,17 @@ test("profile cards list the default profile first, then connected profiles, the
   await page.getByRole("button", { name: "Config", exact: true }).click();
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
 
-  const names = await page
-    .locator(".profile-card-name > span:first-child")
-    .allTextContents();
+  const rows = page.locator(".upstream-profiles-panel tbody tr");
+  const names = await rows.locator(".strong-cell .inline-tools > span:first-child").allTextContents();
   // alpha is the configured default (rank 0), charlie is connected despite
   // not being default (rank 1), bravo is neither (rank 2, added 1st but
   // still last since sort is by rank, not insertion order, across groups).
   expect(names).toEqual(["alpha", "charlie", "bravo"]);
 
-  const charlieCard = page.locator(".profile-card", { hasText: "charlie" });
-  await expect(charlieCard.getByText("Internal IP: 10.10.10.5")).toBeVisible();
-  await expect(charlieCard.getByText("External IP: 203.0.113.9:443")).toBeVisible();
-  const alphaCard = page.locator(".profile-card", { hasText: "alpha" });
-  await expect(alphaCard.locator(".pill", { hasText: "Default" })).toBeVisible();
+  const charlieRow = rows.filter({ hasText: "charlie" });
+  await expect(charlieRow.getByText("Internal 10.10.10.5 / External 203.0.113.9:443")).toBeVisible();
+  const alphaRow = rows.filter({ hasText: "alpha" });
+  await expect(alphaRow.locator(".pill", { hasText: "Default" })).toBeVisible();
 });
 
 test("making a different profile default asks for confirmation before switching", async ({
@@ -665,7 +659,7 @@ test("making a different profile default asks for confirmation before switching"
     void dialog.accept();
   });
   await page
-    .locator(".profile-card", { hasText: "bravo" })
+    .locator(".upstream-profiles-panel tbody tr", { hasText: "bravo" })
     .getByRole("button", { name: "Make default", exact: true })
     .click();
 
@@ -686,10 +680,9 @@ test("toggling host-traffic routing sends host_traffic/host_mode to the API", as
 
   await page.getByRole("button", { name: "Config", exact: true }).click();
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
-  const routingPanel = page
-    .getByRole("heading", { name: "Server-side routing", exact: true })
-    .locator("../..");
-  await routingPanel
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog
     .locator("label")
     .filter({ hasText: "Route this host" })
     .locator("input")
@@ -697,12 +690,16 @@ test("toggling host-traffic routing sends host_traffic/host_mode to the API", as
   // Not getByLabel: this <select>'s computed accessible name concatenates
   // the label text with its own currently-selected option ("Host
   // modeFull (all host traffic)"), so an exact label match never hits.
-  await routingPanel
+  await dialog
     .locator("label")
     .filter({ hasText: "Host mode" })
     .locator("select")
     .selectOption("split");
-  await routingPanel.getByRole("button", { name: "Save", exact: true }).click();
+  await dialog.getByRole("button", { name: "Save settings", exact: true }).click();
+  // onSave awaits three sequential saves (upstream settings, check host,
+  // routing settings) before closing the dialog -- wait for that instead of
+  // a fixed timeout, since the routing/settings POST is the last of the three.
+  await expect(dialog).toHaveCount(0);
 
   const saved = mutations.find(
     (mutation) => mutation.method === "POST" && mutation.path === "/api/routing/settings"

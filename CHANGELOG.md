@@ -29,26 +29,24 @@
   `internal_dns`'s `blocklist_files`/`blocklist_urls` -- korserver reads/fetches and
   caches them, merged in alongside the inline lists and the existing runtime-editable
   routes/domains files. New GUI fields and "Validate URL"/"Download & apply" actions in
-  the Upstream tab's Server-side routing section.
+  the Upstream settings dialog.
 
 ### Changed
 
-- The Server-side routing settings (Mode, Host traffic, Host mode, and the Routes/
-  Domains/route-and-domain-source lists) are now disabled in the GUI while
+- The Upstream tab now shows only a plain profile list (same look as the Users/Sessions
+  tables), with the default (active) profile always first, then any profile with a live
+  connection (showing its internal/external IP), then the rest in the order they were
+  added. Each row has Connect/Disconnect and Make default actions; switching the default
+  profile away from the current one now asks for confirmation.
+- Server-side routing settings (Mode, Host traffic, Host mode, the Routes/Domains lists
+  and their file/URL sources, and the Advanced main_interface/fwmark/table id/nftables
+  prefix block) moved out of the Upstream tab entirely and into the existing Upstream
+  "Settings" dialog, alongside check host/failover/connect-on-boot -- one popup for every
+  upstream-wide setting, saved together. They're disabled in that dialog while
   `upstream.enabled` is false, since they have no effect until Upstream is turned on.
-- The Server-side routing section is now presented as a sequential wizard (this host's
-  own traffic, then a client's traffic by default, then a pointer to per-profile
-  exceptions) instead of a flat list of independent checkboxes/selects, with
-  `main_interface`/fwmark/table id/nftables prefix moved into a collapsed "Advanced"
-  block.
-- The Upstream tab now shows only the profile list, presented as cards, instead of a
-  separate Status panel plus a profile table: the default (active) profile always first,
-  then any profile with a live connection (showing its internal/external IP), then the
-  rest in the order they were added. Each card has Connect/Disconnect and Make default
-  actions; switching the default profile away from the current one now asks for
-  confirmation. Enabled/disabled and the overall Connect/Disconnect action collapse into
-  the profile cards themselves; check host and failover stay in the existing Settings
-  dialog alongside the new connect-on-boot toggle.
+- The nftables Show/Reload/Apply/Cleanup panel is no longer duplicated on the Upstream
+  tab -- use the Dashboard's existing "Render configs"/"Apply firewall/NAT" actions (or
+  `korctl nft`/`korctl routes reload` from the CLI) for manual re-application.
 
 ### Fixed
 

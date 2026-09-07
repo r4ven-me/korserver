@@ -402,55 +402,9 @@ label span,
   overflow-wrap: anywhere;
 }
 
-.profile-cards {
+.upstream-status-cell {
   display: grid;
-  gap: 14px;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-}
-
-.profile-card {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 10px;
-  display: grid;
-  gap: 12px;
-  padding: 14px 16px;
-}
-
-.profile-card.is-default {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.profile-card-header {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  justify-content: space-between;
-}
-
-.profile-card-name {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 15px;
-  font-weight: 800;
-  gap: 8px;
-  overflow-wrap: anywhere;
-}
-
-.profile-card-meta {
-  color: var(--muted);
-  display: grid;
-  font-size: 13px;
   gap: 4px;
-  overflow-wrap: anywhere;
-}
-
-.profile-card-footer {
-  border-top: 1px solid var(--border);
-  padding-top: 12px;
 }
 
 .split {
@@ -466,12 +420,9 @@ label span,
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
-.upstream-settings-grid {
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-}
-
-.upstream-settings-grid .modal-actions {
-  grid-column: 1 / -1;
+.upstream-settings-form {
+  display: grid;
+  gap: 16px;
 }
 
 .profile-routing-group {
