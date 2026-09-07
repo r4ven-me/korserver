@@ -61,6 +61,16 @@
 
 - Toggle switches and the Save button in the Upstream profile/settings dialogs no longer
   sit slightly out of line with the input fields and each other in their row.
+- The Certificate/Key/PKCS#12 fields in the upstream profile editor no longer force the
+  whole dialog to scroll horizontally -- each now takes its own full-width row instead of
+  being squeezed into a narrow shared column.
+- A new upstream profile no longer defaults to "Turn on Upstream (all profiles)" and
+  "This profile enabled" both checked -- every toggle starts off, opt-in. Editing an
+  existing profile also no longer always shows Upstream-enabled as checked regardless of
+  its real state, which could silently re-enable Upstream globally on an unrelated edit
+  while it was deliberately turned off. The two toggles are also relabeled ("Turn on
+  Upstream (all profiles)" / "This profile enabled") with clearer tooltips, since their
+  difference (global vs. this one profile) was easy to confuse.
 - VPN clients could connect successfully but get no network access at all through the
   tunnel on a Docker host whose `ip filter` FORWARD chain defaults to policy drop (recent
   Docker/Moby releases) and only accepts docker0-related traffic: under

@@ -550,6 +550,61 @@ test("creating an upstream profile sends its target routes/domains as arrays", a
   expect(payload.domains).toEqual(["internal.example.com", "corp.example.com"]);
 });
 
+test("a new upstream profile starts with every toggle off", async ({ page }) => {
+  // Regression test: a freshly created profile used to default to "Turn on
+  // Upstream (all profiles)" and "This profile enabled" both checked,
+  // meaning saving a brand-new, half-configured profile could silently
+  // flip upstream.enabled on globally. Everything now starts opt-in.
+  await mockApi(page);
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Create profile", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+
+  for (const label of [
+    "Turn on Upstream (all profiles)",
+    "This profile enabled",
+    "Route client traffic through this profile",
+    "Route host traffic through this profile",
+    "No cert check"
+  ]) {
+    await expect(dialog.getByLabel(label, { exact: true })).not.toBeChecked();
+  }
+});
+
+test("editing an existing profile keeps the actual Upstream-enabled state, not a hardcoded default", async ({
+  page
+}) => {
+  // Regression test: editing any profile used to always show "Turn on
+  // Upstream (all profiles)" as checked regardless of the real
+  // upstream.enabled, so saving an unrelated edit while Upstream was
+  // deliberately off would silently turn it back on.
+  await mockApi(page, {
+    upstreamEnabled: false,
+    upstreamProfiles: [
+      {
+        name: "alpha",
+        server: "alpha.example.com",
+        port: "443",
+        auth_type: "password",
+        username: "user",
+        enabled: true
+      }
+    ]
+  });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Upstream", exact: true }).click();
+  await page.getByRole("button", { name: "Edit profile" }).first().click();
+
+  await expect(
+    page.getByRole("dialog").getByLabel("Turn on Upstream (all profiles)", { exact: true })
+  ).not.toBeChecked();
+});
+
 test("creating an upstream profile can also target host traffic on its own route/domain lists", async ({
   page
 }) => {

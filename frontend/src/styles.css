@@ -1704,8 +1704,18 @@ code {
   white-space: nowrap;
 }
 
+.settings-grid > .cert-source-field {
+  /* Own full-width row instead of squeezed into a ~150px auto-fit column
+     alongside plain inputs: the toggle row + textarea/path input need real
+     width to be usable, and forcing that width into a shared column used
+     to blow the whole grid wider than the modal, causing it to scroll
+     horizontally instead of wrapping other fields onto later rows. */
+  grid-column: 1 / -1;
+}
+
 .cert-source-toggle {
   display: flex;
+  flex-wrap: wrap;
   gap: 4px;
   margin-bottom: 6px;
 }

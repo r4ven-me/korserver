@@ -428,11 +428,14 @@ const emptyUpstreamProfileDraft: UpstreamProfileDraft = {
   route_host_enabled: false,
   host_routes: "",
   host_domains: "",
-  enable: true,
-  enabled: true
+  enable: false,
+  enabled: false
 };
 
-function upstreamProfileToDraft(profile: UpstreamProfile): UpstreamProfileDraft {
+function upstreamProfileToDraft(
+  profile: UpstreamProfile,
+  upstreamEnabled: boolean
+): UpstreamProfileDraft {
   return {
     name: profile.name,
     server: profile.server,
@@ -458,7 +461,10 @@ function upstreamProfileToDraft(profile: UpstreamProfile): UpstreamProfileDraft 
     route_host_enabled: profile.route_host_enabled ?? false,
     host_routes: listText(profile.host_routes ?? []),
     host_domains: listText(profile.host_domains ?? []),
-    enable: true,
+    // Reflects the ACTUAL current upstream.enabled, not a hardcoded true --
+    // editing a profile while upstream is deliberately disabled must not
+    // silently re-enable it just because this checkbox defaulted on.
+    enable: upstreamEnabled,
     enabled: profile.enabled
   };
 }
@@ -1679,9 +1685,8 @@ function App() {
       return;
     }
     const draft: UpstreamProfileDraft = {
-      ...upstreamProfileToDraft(active),
-      check_host: upstreamCheckHost,
-      enable: Boolean(state.upstream?.enabled)
+      ...upstreamProfileToDraft(active, Boolean(state.upstream?.enabled)),
+      check_host: upstreamCheckHost
     };
     const result = await runAction("upstream-settings", "Check host saved", (token) =>
       saveUpstreamProfile(token, draft)
@@ -2414,7 +2419,9 @@ function App() {
                 setUpstreamModalOpen(true);
               }}
               onEditProfile={(profile) => {
-                setUpstreamDraft(upstreamProfileToDraft(profile));
+                setUpstreamDraft(
+                  upstreamProfileToDraft(profile, Boolean(state.upstream?.enabled))
+                );
                 setEditingUpstreamProfile(true);
                 setUpstreamDialogKey((key) => key + 1);
                 setUpstreamModalOpen(true);
@@ -6257,24 +6264,27 @@ function UpstreamProfileDialog({
             />
             <span>No cert check</span>
           </label>
-          <label className="switch" title="Enable upstream after saving this profile">
+          <label
+            className="switch"
+            title="Turns on the whole Upstream feature (upstream.enabled) when you save -- affects every profile, not just this one. Leave off while you're still setting things up. Independent of 'This profile enabled' below, which only concerns this one profile."
+          >
             <input
               checked={draft.enable}
               onChange={(event) => onDraftChange({ ...draft, enable: event.target.checked })}
               type="checkbox"
             />
-            <span>Enable after save</span>
+            <span>Turn on Upstream (all profiles)</span>
           </label>
           <label
             className="switch"
-            title="Whether the watchdog keeps this specific profile dialed. Off disconnects it (if it's the active profile, that also clears the active selection) and keeps the watchdog from redialing it -- independent of failover, which only controls automatic switching."
+            title="This profile only -- not the whole Upstream feature (see the toggle above for that). Whether the watchdog keeps THIS specific profile dialed. Off disconnects it (if it's the active profile, that also clears the active selection) and keeps the watchdog from redialing it -- independent of failover, which only controls automatic switching."
           >
             <input
               checked={draft.enabled}
               onChange={(event) => onDraftChange({ ...draft, enabled: event.target.checked })}
               type="checkbox"
             />
-            <span>Profile enabled</span>
+            <span>This profile enabled</span>
           </label>
           <div className="modal-actions">
             <button
