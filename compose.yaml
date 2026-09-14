@@ -1,0 +1,23 @@
+name: korserver
+
+services:
+  korserver:
+    build:
+      context: .
+    image: korserver:latest
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      KORSERVER_CONFIG: /etc/korserver/config.yaml
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    network_mode: host
+    devices:
+      - /dev/net/tun:/dev/net/tun
+      - /dev/vhost-net:/dev/vhost-net
+    volumes:
+      - ./config:/etc/korserver
+      - ./data:/var/lib/korserver
+      - ./logs:/var/log/korserver

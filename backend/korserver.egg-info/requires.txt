@@ -1,0 +1,14 @@
+fastapi<1,>=0.111
+jinja2<4,>=3.1
+pydantic<3,>=2.7
+python-multipart<1,>=0.0.9
+python-dotenv<2,>=1.0
+pyyaml<7,>=6
+typer<1,>=0.12
+uvicorn[standard]<1,>=0.30
+
+[dev]
+httpx<1,>=0.27
+mypy<2,>=1.10
+pytest<9,>=8.2
+ruff<1,>=0.5
