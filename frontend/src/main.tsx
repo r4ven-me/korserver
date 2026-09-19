@@ -24,6 +24,7 @@ import {
   RefreshCw,
   Route,
   Save,
+  Send,
   ScrollText,
   Server,
   Settings,
@@ -124,6 +125,8 @@ import {
   revokeCaCertificateB64,
   revokeCaCertificateFile,
   saveAuthMethodsSettings,
+  testOtpEmail,
+  testOtpTelegram,
   saveCertificateSettings,
   saveGeneralSettings,
   saveGroupPolicy,
@@ -559,8 +562,10 @@ function App() {
     hostDomainsFilesText: "",
     hostDomainsUrlsText: ""
   });
-  const [internalDnsDraft, setInternalDnsDraft] = useState({
+  const [internalDnsDraft, setInternalDnsDraft] = useState<InternalDnsDraft>({
     enabled: false,
+    publicUpstreamsText: "",
+    publicDomainsText: "",
     domainsText: "",
     filesText: "",
     urlsText: "",
@@ -880,6 +885,8 @@ function App() {
         if (internalDns.status === "fulfilled") {
           setInternalDnsDraft({
             enabled: internalDns.value.enabled,
+            publicUpstreamsText: internalDns.value.public_upstreams.join("\n"),
+            publicDomainsText: internalDns.value.public_domains.join("\n"),
             domainsText: internalDns.value.blocklist_domains.join("\n"),
             filesText: internalDns.value.blocklist_files.map((item) => item.path).join("\n"),
             urlsText: internalDns.value.blocklist_urls.map((item) => item.url).join("\n"),
@@ -1455,6 +1462,8 @@ function App() {
       (token) =>
         saveInternalDnsSettings(token, {
           enabled: internalDnsDraft.enabled,
+          public_upstreams: splitLines(internalDnsDraft.publicUpstreamsText),
+          public_domains: splitLines(internalDnsDraft.publicDomainsText),
           blocklist_domains: splitLines(internalDnsDraft.domainsText),
           blocklist_files: splitLines(internalDnsDraft.filesText),
           blocklist_urls: splitLines(internalDnsDraft.urlsText),
@@ -1545,20 +1554,29 @@ function App() {
     const result = await runAction(
       "auth-methods-settings",
       "Authentication method settings saved",
-      (token) =>
-        saveAuthMethodsSettings(token, {
-          password_enabled: authMethodsDraft.passwordEnabled,
-          certificate_enabled: authMethodsDraft.certificateEnabled,
-          otp_enabled: authMethodsDraft.otpEnabled,
-          otp_ocserv_oath_auth: authMethodsDraft.otpOcservOathAuth,
-          otp_issuer: authMethodsDraft.otpIssuer,
-          otp_send_by_email: authMethodsDraft.otpSendByEmail,
-          otp_send_by_telegram: authMethodsDraft.otpSendByTelegram
-        })
+      (token) => saveAuthMethodsSettings(token, authMethodsPayload(authMethodsDraft))
     );
     if (result !== null) {
       recordCommand("config", syntheticCommand(["korctl", "server", "auth-settings"], "saved"));
     }
+  };
+
+  const handleTestOtpEmail = async () => {
+    await runAction(
+      "auth-methods-test-email",
+      "Test email sent",
+      (token) => testOtpEmail(token, authMethodsPayload(authMethodsDraft)),
+      { reload: false }
+    );
+  };
+
+  const handleTestOtpTelegram = async () => {
+    await runAction(
+      "auth-methods-test-telegram",
+      "Test Telegram message sent",
+      (token) => testOtpTelegram(token, authMethodsPayload(authMethodsDraft)),
+      { reload: false }
+    );
   };
 
   const handleSaveWebSettings = async () => {
@@ -2627,6 +2645,8 @@ function App() {
             onGeneralSettingsDraftChange={setGeneralSettingsDraft}
             onSaveServerSettings={() => void handleSaveServerSettings()}
             onSaveAuthMethodsSettings={() => void handleSaveAuthMethodsSettings()}
+            onTestOtpEmail={() => void handleTestOtpEmail()}
+            onTestOtpTelegram={() => void handleTestOtpTelegram()}
             onSaveWebSettings={() => void handleSaveWebSettings()}
             onSaveGeneralSettings={() => void handleSaveGeneralSettings()}
             busy={busy}
@@ -3403,6 +3423,15 @@ type AuthMethodsDraft = {
   otpIssuer: string;
   otpSendByEmail: boolean;
   otpSendByTelegram: boolean;
+  otpSmtpHost: string;
+  otpSmtpPort: number;
+  otpSmtpUsername: string;
+  otpSmtpPassword: string;
+  otpSmtpFrom: string;
+  otpSmtpStarttls: boolean;
+  otpSmtpTestRecipient: string;
+  otpTelegramBotToken: string;
+  otpTelegramChatId: string;
 };
 
 function readAuthMethodsDraft(config: Record<string, unknown>): AuthMethodsDraft {
@@ -3417,7 +3446,37 @@ function readAuthMethodsDraft(config: Record<string, unknown>): AuthMethodsDraft
     otpOcservOathAuth: readBoolean(otp.ocserv_oath_auth, false),
     otpIssuer: readString(otp.issuer, "Korvus Server"),
     otpSendByEmail: readBoolean(otp.send_by_email, false),
-    otpSendByTelegram: readBoolean(otp.send_by_telegram, false)
+    otpSendByTelegram: readBoolean(otp.send_by_telegram, false),
+    otpSmtpHost: readString(otp.smtp_host, ""),
+    otpSmtpPort: readNumber(otp.smtp_port, 587),
+    otpSmtpUsername: readString(otp.smtp_username, ""),
+    otpSmtpPassword: "",
+    otpSmtpFrom: readString(otp.smtp_from, ""),
+    otpSmtpStarttls: readBoolean(otp.smtp_starttls, true),
+    otpSmtpTestRecipient: readString(otp.smtp_test_recipient, ""),
+    otpTelegramBotToken: "",
+    otpTelegramChatId: readString(otp.telegram_chat_id, "")
+  };
+}
+
+function authMethodsPayload(draft: AuthMethodsDraft) {
+  return {
+    password_enabled: draft.passwordEnabled,
+    certificate_enabled: draft.certificateEnabled,
+    otp_enabled: draft.otpEnabled,
+    otp_ocserv_oath_auth: draft.otpOcservOathAuth,
+    otp_issuer: draft.otpIssuer,
+    otp_send_by_email: draft.otpSendByEmail,
+    otp_send_by_telegram: draft.otpSendByTelegram,
+    otp_smtp_host: draft.otpSmtpHost.trim() || null,
+    otp_smtp_port: draft.otpSmtpPort,
+    otp_smtp_username: draft.otpSmtpUsername.trim() || null,
+    otp_smtp_password: draft.otpSmtpPassword || null,
+    otp_smtp_from: draft.otpSmtpFrom.trim() || null,
+    otp_smtp_starttls: draft.otpSmtpStarttls,
+    otp_smtp_test_recipient: draft.otpSmtpTestRecipient.trim() || null,
+    otp_telegram_bot_token: draft.otpTelegramBotToken || null,
+    otp_telegram_chat_id: draft.otpTelegramChatId.trim() || null
   };
 }
 
@@ -4575,6 +4634,18 @@ function RoutingListSourcesPanel({
   );
 }
 
+type InternalDnsDraft = {
+  enabled: boolean;
+  publicUpstreamsText: string;
+  publicDomainsText: string;
+  domainsText: string;
+  filesText: string;
+  urlsText: string;
+  cacheSize: number;
+  logQueries: boolean;
+  localRecordsText: string;
+};
+
 function InternalDnsView({
   status,
   draft,
@@ -4590,28 +4661,12 @@ function InternalDnsView({
   onRefreshUrl
 }: {
   status: InternalDnsStatus | null;
-  draft: {
-    enabled: boolean;
-    domainsText: string;
-    filesText: string;
-    urlsText: string;
-    cacheSize: number;
-    logQueries: boolean;
-    localRecordsText: string;
-  };
+  draft: InternalDnsDraft;
   dnsServerDraft: RoutingDraft;
   busy: string | null;
   commandOutput: CommandResult | CommandResult[] | null;
   onClearCommand: () => void;
-  onDraftChange: (value: {
-    enabled: boolean;
-    domainsText: string;
-    filesText: string;
-    urlsText: string;
-    cacheSize: number;
-    logQueries: boolean;
-    localRecordsText: string;
-  }) => void;
+  onDraftChange: (value: InternalDnsDraft) => void;
   onDnsServerDraftChange: (value: RoutingDraft) => void;
   onSave: () => void;
   onSaveDnsServer: () => void;
@@ -4753,6 +4808,39 @@ function InternalDnsView({
               value={draft.localRecordsText}
               onChange={(event) =>
                 onDraftChange({ ...draft, localRecordsText: event.target.value })
+              }
+            />
+          </label>
+        </div>
+      </section>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Public DNS forwarding</h2>
+        </div>
+        <p className="muted-line">
+          Send queries for the listed domains to these public DNS servers instead of the default
+          upstream resolvers.
+        </p>
+        <div className="settings-grid internal-dns-grid">
+          <label className="blocklist-domains">
+            <span>Public DNS upstreams (one IP per line)</span>
+            <textarea
+              rows={4}
+              placeholder={"1.1.1.1\n8.8.8.8"}
+              value={draft.publicUpstreamsText}
+              onChange={(event) =>
+                onDraftChange({ ...draft, publicUpstreamsText: event.target.value })
+              }
+            />
+          </label>
+          <label className="blocklist-domains">
+            <span>Public domains (one per line)</span>
+            <textarea
+              rows={4}
+              placeholder={"example.com\nexample.net"}
+              value={draft.publicDomainsText}
+              onChange={(event) =>
+                onDraftChange({ ...draft, publicDomainsText: event.target.value })
               }
             />
           </label>
@@ -7035,6 +7123,8 @@ function ConfigView({
   onGeneralSettingsDraftChange,
   onSaveServerSettings,
   onSaveAuthMethodsSettings,
+  onTestOtpEmail,
+  onTestOtpTelegram,
   onSaveWebSettings,
   onSaveGeneralSettings,
   busy,
@@ -7065,6 +7155,8 @@ function ConfigView({
   onGeneralSettingsDraftChange: (value: GeneralSettingsDraft) => void;
   onSaveServerSettings: () => void;
   onSaveAuthMethodsSettings: () => void;
+  onTestOtpEmail: () => void;
+  onTestOtpTelegram: () => void;
   onSaveWebSettings: () => void;
   onSaveGeneralSettings: () => void;
   busy: string | null;
@@ -7468,6 +7560,155 @@ function ConfigView({
             />
             <span>Send OTP by Telegram</span>
           </label>
+          {authMethodsDraft.otpSendByEmail && (
+            <>
+              <label>
+                <span>SMTP host</span>
+                <input
+                  value={authMethodsDraft.otpSmtpHost}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpHost: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                <span>SMTP port</span>
+                <input
+                  min={1}
+                  max={65535}
+                  type="number"
+                  value={authMethodsDraft.otpSmtpPort}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({
+                      ...authMethodsDraft,
+                      otpSmtpPort: Number(event.target.value)
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>SMTP username</span>
+                <input
+                  value={authMethodsDraft.otpSmtpUsername}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({
+                      ...authMethodsDraft,
+                      otpSmtpUsername: event.target.value
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>SMTP password</span>
+                <input
+                  type="password"
+                  placeholder="Blank preserves saved secret"
+                  value={authMethodsDraft.otpSmtpPassword}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({
+                      ...authMethodsDraft,
+                      otpSmtpPassword: event.target.value
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>SMTP from address</span>
+                <input
+                  type="email"
+                  value={authMethodsDraft.otpSmtpFrom}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpFrom: event.target.value })
+                  }
+                />
+              </label>
+              <label className="switch">
+                <input
+                  checked={authMethodsDraft.otpSmtpStarttls}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({
+                      ...authMethodsDraft,
+                      otpSmtpStarttls: event.target.checked
+                    })
+                  }
+                  type="checkbox"
+                />
+                <span>SMTP STARTTLS</span>
+              </label>
+              <label>
+                <span>Test email recipient</span>
+                <input
+                  type="email"
+                  value={authMethodsDraft.otpSmtpTestRecipient}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({
+                      ...authMethodsDraft,
+                      otpSmtpTestRecipient: event.target.value
+                    })
+                  }
+                />
+              </label>
+              <div className="settings-actions">
+                <ActionButton
+                  label="Test email"
+                  icon={Send}
+                  busy={busy === "auth-methods-test-email"}
+                  disabled={
+                    !authMethodsDraft.otpEnabled ||
+                    !authMethodsDraft.otpSmtpHost.trim() ||
+                    authMethodsDraft.otpSmtpPort < 1 ||
+                    authMethodsDraft.otpSmtpPort > 65535 ||
+                    !authMethodsDraft.otpSmtpFrom.trim() ||
+                    !authMethodsDraft.otpSmtpTestRecipient.trim()
+                  }
+                  onClick={onTestOtpEmail}
+                />
+              </div>
+            </>
+          )}
+          {authMethodsDraft.otpSendByTelegram && (
+            <>
+              <label>
+                <span>Telegram bot token</span>
+                <input
+                  type="password"
+                  placeholder="Blank preserves saved secret"
+                  value={authMethodsDraft.otpTelegramBotToken}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({
+                      ...authMethodsDraft,
+                      otpTelegramBotToken: event.target.value
+                    })
+                  }
+                />
+              </label>
+              <label>
+                <span>Telegram chat ID</span>
+                <input
+                  value={authMethodsDraft.otpTelegramChatId}
+                  onChange={(event) =>
+                    onAuthMethodsDraftChange({
+                      ...authMethodsDraft,
+                      otpTelegramChatId: event.target.value
+                    })
+                  }
+                />
+              </label>
+              <div className="settings-actions">
+                <ActionButton
+                  label="Test Telegram"
+                  icon={Send}
+                  busy={busy === "auth-methods-test-telegram"}
+                  disabled={
+                    !authMethodsDraft.otpEnabled ||
+                    !authMethodsDraft.otpTelegramBotToken ||
+                    !authMethodsDraft.otpTelegramChatId.trim()
+                  }
+                  onClick={onTestOtpTelegram}
+                />
+              </div>
+            </>
+          )}
         </div>
         <div className="panel-footer">
           <ActionButton

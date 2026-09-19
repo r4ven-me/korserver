@@ -2,9 +2,12 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   login,
+  saveAuthMethodsSettings,
   saveRoutingSettings,
   saveUpstreamProfile,
   setCsrfToken,
+  testOtpEmail,
+  testOtpTelegram,
   writeRenderedConfig,
   type UpstreamProfileDraft
 } from "./api";
@@ -86,6 +89,48 @@ const upstreamProfileDraft: UpstreamProfileDraft = {
   enable: true,
   enabled: true
 };
+
+const authMethodsPayload = {
+  password_enabled: true,
+  certificate_enabled: false,
+  otp_enabled: true,
+  otp_ocserv_oath_auth: false,
+  otp_issuer: "Korvus Server",
+  otp_send_by_email: true,
+  otp_send_by_telegram: true,
+  otp_smtp_host: "smtp.example.com",
+  otp_smtp_port: 587,
+  otp_smtp_username: "mailer",
+  otp_smtp_password: "smtp-secret",
+  otp_smtp_from: "vpn@example.com",
+  otp_smtp_starttls: true,
+  otp_smtp_test_recipient: "admin@example.com",
+  otp_telegram_bot_token: "bot-secret",
+  otp_telegram_chat_id: "123456"
+};
+
+describe("OTP delivery settings API", () => {
+  it.each([
+    ["save", saveAuthMethodsSettings, "/api/server/auth-settings"],
+    ["email test", testOtpEmail, "/api/server/auth-settings/test-email"],
+    ["Telegram test", testOtpTelegram, "/api/server/auth-settings/test-telegram"]
+  ])("sends the complete flattened payload for %s", async (_name, action, expectedPath) => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "ok" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await action("session", authMethodsPayload);
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe(expectedPath);
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual(authMethodsPayload);
+  });
+});
 
 describe("saveUpstreamProfile", () => {
   it("splits the newline/comma-separated routes and domains textareas into arrays", async () => {

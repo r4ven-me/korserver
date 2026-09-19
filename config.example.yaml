@@ -70,6 +70,17 @@ auth:
     enabled: false
     ocserv_oath_auth: false
     issuer: Korvus Server
+    send_by_email: false
+    send_by_telegram: false
+    smtp_host: null
+    smtp_port: 587
+    smtp_username: null
+    smtp_password: null
+    smtp_from: null
+    smtp_starttls: true
+    smtp_test_recipient: null
+    telegram_bot_token: null
+    telegram_chat_id: null
   oidc:
     enabled: false
     connector: pam
@@ -127,6 +138,13 @@ routing:
 # Upstream resolvers are taken from server.dns.
 internal_dns:
   enabled: false
+  # Optional forwarding for selected public zones. Clients still use this
+  # internal DNS; the shared upstream list applies to every domain below.
+  public_upstreams: []
+  public_domains: []
+  # Example:
+  # public_upstreams: [1.1.1.1, 8.8.8.8]
+  # public_domains: [github.com]
   # Inline list of blocked domains.
   blocklist_domains: []
   # Local text files with blocked domains (hosts or plain-domain format).

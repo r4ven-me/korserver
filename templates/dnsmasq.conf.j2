@@ -23,9 +23,17 @@ no-resolv
 server={{ dns }}
 {% endfor %}
 
+{% for domain in public_domains %}
+{% for dns in public_upstreams %}
+server=/{{ domain }}/{{ dns }}
+{% endfor %}
+{% endfor %}
+
 {% if split_dns_active and upstream_dns %}
 {% for domain in split_domains %}
+{% if domain not in public_domain_names %}
 server=/{{ domain }}/{{ upstream_dns[0] }}
+{% endif %}
 nftset=/{{ domain }}/4#inet#{{ filter_table }}#{{ split_v4_set }},6#inet#{{ filter_table }}#{{ split_v6_set }}
 {% endfor %}
 {% endif %}

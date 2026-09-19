@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import smtplib
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
-from korserver.config.models import AppConfig
+from korserver.config.models import AppConfig, OtpAuthConfig
 from korserver.services.command import CommandResult
+from korserver.services.otp_delivery import OtpDeliveryService
 from korserver.services.server import ServerService
 
 router = APIRouter(dependencies=[Depends(require_admin)])
@@ -61,6 +64,62 @@ class AuthMethodsSettingsRequest(BaseModel):
     otp_issuer: str = "Korvus Server"
     otp_send_by_email: bool = False
     otp_send_by_telegram: bool = False
+    otp_smtp_host: str | None = None
+    otp_smtp_port: int | None = Field(default=None, ge=1, le=65535)
+    otp_smtp_username: str | None = None
+    otp_smtp_password: str | None = None
+    otp_smtp_from: str | None = None
+    otp_smtp_starttls: bool | None = None
+    otp_smtp_test_recipient: str | None = None
+    otp_telegram_bot_token: str | None = None
+    otp_telegram_chat_id: str | None = None
+
+
+def otp_settings_from_payload(
+    payload: AuthMethodsSettingsRequest,
+    current: AppConfig,
+) -> dict[str, object]:
+    return {
+        "enabled": payload.otp_enabled,
+        "ocserv_oath_auth": payload.otp_ocserv_oath_auth,
+        "issuer": payload.otp_issuer,
+        "send_by_email": payload.otp_send_by_email,
+        "send_by_telegram": payload.otp_send_by_telegram,
+        "smtp_host": (
+            payload.otp_smtp_host
+            if "otp_smtp_host" in payload.model_fields_set
+            else current.auth.otp.smtp_host
+        ),
+        "smtp_port": payload.otp_smtp_port or current.auth.otp.smtp_port,
+        "smtp_username": (
+            payload.otp_smtp_username
+            if "otp_smtp_username" in payload.model_fields_set
+            else current.auth.otp.smtp_username
+        ),
+        "smtp_password": payload.otp_smtp_password or current.auth.otp.smtp_password,
+        "smtp_from": (
+            payload.otp_smtp_from
+            if "otp_smtp_from" in payload.model_fields_set
+            else current.auth.otp.smtp_from
+        ),
+        "smtp_starttls": (
+            payload.otp_smtp_starttls
+            if payload.otp_smtp_starttls is not None
+            else current.auth.otp.smtp_starttls
+        ),
+        "smtp_test_recipient": (
+            payload.otp_smtp_test_recipient
+            if "otp_smtp_test_recipient" in payload.model_fields_set
+            else current.auth.otp.smtp_test_recipient
+        ),
+        "telegram_bot_token": payload.otp_telegram_bot_token
+        or current.auth.otp.telegram_bot_token,
+        "telegram_chat_id": (
+            payload.otp_telegram_chat_id
+            if "otp_telegram_chat_id" in payload.model_fields_set
+            else current.auth.otp.telegram_chat_id
+        ),
+    }
 
 
 def command_result(result: CommandResult, argv: tuple[str, ...] | None = None) -> dict[str, object]:
@@ -103,13 +162,7 @@ def save_auth_methods_settings(
     patch = {
         "password": {"enabled": payload.password_enabled},
         "certificate": {"enabled": payload.certificate_enabled},
-        "otp": {
-            "enabled": payload.otp_enabled,
-            "ocserv_oath_auth": payload.otp_ocserv_oath_auth,
-            "issuer": payload.otp_issuer,
-            "send_by_email": payload.otp_send_by_email,
-            "send_by_telegram": payload.otp_send_by_telegram,
-        },
+        "otp": otp_settings_from_payload(payload, request.app.state.config),
     }
     loaded_config, written = apply_config_patch(request, {"auth": patch})
     return {
@@ -117,6 +170,30 @@ def save_auth_methods_settings(
         "written": written,
         "auth": loaded_config.model_dump_safe()["auth"],
     }
+
+
+@router.post("/auth-settings/test-email")
+def test_otp_email(request: Request, payload: AuthMethodsSettingsRequest) -> dict[str, str]:
+    settings = OtpAuthConfig.model_validate(
+        otp_settings_from_payload(payload, request.app.state.config)
+    )
+    try:
+        OtpDeliveryService(settings).send_test_email()
+    except (OSError, ValueError, smtplib.SMTPException) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "sent"}
+
+
+@router.post("/auth-settings/test-telegram")
+def test_otp_telegram(request: Request, payload: AuthMethodsSettingsRequest) -> dict[str, str]:
+    settings = OtpAuthConfig.model_validate(
+        otp_settings_from_payload(payload, request.app.state.config)
+    )
+    try:
+        OtpDeliveryService(settings).send_test_telegram()
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "sent"}
 
 
 @router.get("/status")

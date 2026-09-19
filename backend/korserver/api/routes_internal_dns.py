@@ -19,6 +19,8 @@ class InternalDnsSettingsRequest(BaseModel):
     cache_size: int = 150
     log_queries: bool = False
     local_records: list[str] = Field(default_factory=list)
+    public_upstreams: list[str] | None = None
+    public_domains: list[str] | None = None
 
 
 class BlocklistRefreshRequest(BaseModel):
@@ -47,17 +49,21 @@ def save_internal_dns_settings(
     request: Request,
     payload: InternalDnsSettingsRequest,
 ) -> dict[str, object]:
-    patch = {
-        "internal_dns": {
-            "enabled": payload.enabled,
-            "blocklist_domains": payload.blocklist_domains,
-            "blocklist_files": payload.blocklist_files,
-            "blocklist_urls": payload.blocklist_urls,
-            "cache_size": payload.cache_size,
-            "log_queries": payload.log_queries,
-            "local_records": payload.local_records,
-        }
+    settings: dict[str, object] = {
+        "enabled": payload.enabled,
+        "blocklist_domains": payload.blocklist_domains,
+        "blocklist_files": payload.blocklist_files,
+        "blocklist_urls": payload.blocklist_urls,
+        "cache_size": payload.cache_size,
+        "log_queries": payload.log_queries,
+        "local_records": payload.local_records,
     }
+    # Older frontend builds do not know these fields; when both are omitted,
+    # preserve existing forwarding rules rather than silently clearing them.
+    if payload.public_upstreams is not None or payload.public_domains is not None:
+        settings["public_upstreams"] = payload.public_upstreams or []
+        settings["public_domains"] = payload.public_domains or []
+    patch = {"internal_dns": settings}
     loaded_config, written = apply_config_patch(request, patch)
     return {
         "status": "saved",

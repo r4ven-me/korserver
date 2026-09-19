@@ -182,6 +182,8 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         listen: "10.10.10.1",
         port: 53,
         client_dns: ["1.1.1.1", "8.8.8.8"],
+        public_upstreams: [],
+        public_domains: [],
         blocklist_domains: [],
         blocklist_files: [],
         blocklist_urls: [],
@@ -226,6 +228,18 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         default_group_config: null
       },
       "/api/config": {
+        auth: {
+          password: { enabled: true },
+          certificate: { enabled: false },
+          otp: {
+            enabled: true,
+            issuer: "Korvus Server",
+            send_by_email: false,
+            send_by_telegram: false,
+            smtp_port: 587,
+            smtp_starttls: true
+          }
+        },
         routing: { mode: options.routingMode ?? "full", split: {} },
         web: { terminal_enabled: options.terminalEnabled ?? false }
       },
@@ -355,6 +369,77 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
     await page.getByRole("button", { name: pill, exact: true }).click();
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
   }
+});
+
+test("Authentication OTP delivery credentials can be tested with current form values", async ({
+  page
+}) => {
+  const mutations: NonNullable<MockOptions["mutations"]> = [];
+  await mockApi(page, { mutations });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Authentication", exact: true }).click();
+
+  await page.getByLabel("Send OTP by email").check();
+  await expect(page.getByLabel("SMTP host")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Test email" })).toBeDisabled();
+  await page.getByLabel("SMTP host").fill("smtp.example.com");
+  await page.getByLabel("SMTP username").fill("mailer");
+  await page.getByLabel("SMTP password").fill("smtp-secret");
+  await expect(page.getByLabel("SMTP password")).toHaveAttribute("type", "password");
+  await page.getByLabel("SMTP from address").fill("vpn@example.com");
+  await page.getByLabel("Test email recipient").fill("admin@example.com");
+  await page.getByRole("button", { name: "Test email" }).click();
+
+  await page.getByLabel("Send OTP by Telegram").check();
+  await expect(page.getByRole("button", { name: "Test Telegram" })).toBeDisabled();
+  await page.getByLabel("Telegram bot token").fill("bot-secret");
+  await expect(page.getByLabel("Telegram bot token")).toHaveAttribute("type", "password");
+  await page.getByLabel("Telegram chat ID").fill("123456");
+  await page.getByRole("button", { name: "Test Telegram" }).click();
+
+  await expect.poll(
+    () => mutations.filter((entry) => entry.path.includes("/api/server/auth-settings/test-")).length
+  ).toBe(2);
+  const emailBody = JSON.parse(
+    mutations.find((entry) => entry.path.endsWith("/test-email"))?.body ?? "{}"
+  );
+  expect(emailBody).toMatchObject({
+    otp_smtp_host: "smtp.example.com",
+    otp_smtp_port: 587,
+    otp_smtp_username: "mailer",
+    otp_smtp_password: "smtp-secret",
+    otp_smtp_from: "vpn@example.com",
+    otp_smtp_starttls: true,
+    otp_smtp_test_recipient: "admin@example.com"
+  });
+  const telegramBody = JSON.parse(
+    mutations.find((entry) => entry.path.endsWith("/test-telegram"))?.body ?? "{}"
+  );
+  expect(telegramBody).toMatchObject({
+    otp_telegram_bot_token: "bot-secret",
+    otp_telegram_chat_id: "123456"
+  });
+});
+
+test("Internal DNS public forwarding fields are editable and saved as arrays", async ({ page }) => {
+  const mutations: NonNullable<MockOptions["mutations"]> = [];
+  await mockApi(page, { mutations });
+  await signIn(page);
+
+  await page.getByRole("button", { name: "Config", exact: true }).click();
+  await page.getByRole("button", { name: "Internal DNS", exact: true }).click();
+  await page.getByLabel("Public DNS upstreams (one IP per line)").fill("1.1.1.1\n8.8.8.8");
+  await page.getByLabel("Public domains (one per line)").fill("example.com\nexample.net");
+  await page.getByRole("button", { name: "Save", exact: true }).first().click();
+
+  await expect.poll(() => mutations.find((entry) => entry.path === "/api/internal-dns/settings"))
+    .toBeTruthy();
+  const mutation = mutations.find((entry) => entry.path === "/api/internal-dns/settings");
+  const body = JSON.parse(mutation?.body ?? "{}");
+  expect(body.public_upstreams).toEqual(["1.1.1.1", "8.8.8.8"]);
+  expect(body.public_domains).toEqual(["example.com", "example.net"]);
 });
 
 test("server-side routing controls in Upstream settings are inert until Upstream is enabled", async ({

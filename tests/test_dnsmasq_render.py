@@ -80,6 +80,30 @@ def test_dnsmasq_render_includes_domains_from_domains_file(tmp_path: Path) -> No
     assert "nftset=/panel-added.example/4#inet#korserver_filter#split_v4" in rendered
 
 
+def test_dnsmasq_render_domain_upstream_overrides_split_dns_server(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {
+                "mode": "split",
+                "split": {"tunnel_dns": True, "domains": ["github.com"]},
+            },
+            "internal_dns": {
+                "public_upstreams": ["1.1.1.1", "8.8.8.8"],
+                "public_domains": ["GitHub.COM."],
+            },
+        },
+        environ={},
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+
+    assert "server=/github.com/1.1.1.1" in rendered
+    assert "server=/github.com/8.8.8.8" in rendered
+    assert rendered.count("server=/github.com/") == 2
+    assert "nftset=/github.com/4#inet#korserver_filter#split_v4" in rendered
+
+
 def test_dnsmasq_render_includes_cache_size_and_log_queries(tmp_path: Path) -> None:
     config = load_config(
         tmp_path / "missing.yaml",

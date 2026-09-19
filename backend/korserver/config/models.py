@@ -281,6 +281,15 @@ class OtpAuthConfig(StrictModel):
     issuer: str = "Korvus Server"
     send_by_email: bool = False
     send_by_telegram: bool = False
+    smtp_host: str | None = None
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str | None = None
+    smtp_password: str | None = None
+    smtp_from: str | None = None
+    smtp_starttls: bool = True
+    smtp_test_recipient: str | None = None
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
 
 
 class OidcPamConnectorConfig(StrictModel):
@@ -740,6 +749,8 @@ class InternalDnsConfig(StrictModel):
     cache_size: int = Field(default=150, ge=0, le=10000)
     log_queries: bool = False
     local_records: list[str] = Field(default_factory=list)
+    public_upstreams: list[str] = Field(default_factory=list)
+    public_domains: list[str] = Field(default_factory=list)
 
     @field_validator("blocklist_domains")
     @classmethod
@@ -760,6 +771,25 @@ class InternalDnsConfig(StrictModel):
     @classmethod
     def validate_local_records(cls, value: list[str]) -> list[str]:
         return [_validate_local_record(item) for item in value]
+
+    @field_validator("public_upstreams")
+    @classmethod
+    def validate_public_upstreams(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_ip(resolver) for resolver in value))
+
+    @field_validator("public_domains")
+    @classmethod
+    def validate_public_domains(cls, value: list[str]) -> list[str]:
+        return list(dict.fromkeys(_validate_domain(domain).lower() for domain in value))
+
+    @model_validator(mode="after")
+    def validate_public_forwarding(self) -> InternalDnsConfig:
+        if bool(self.public_upstreams) != bool(self.public_domains):
+            raise ValueError(
+                "internal_dns.public_upstreams and internal_dns.public_domains "
+                "must either both be configured or both be empty"
+            )
+        return self
 
 
 class OidcProviderConfig(StrictModel):

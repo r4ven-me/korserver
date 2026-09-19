@@ -953,10 +953,24 @@ export type InternalDnsStatus = {
   listen: string;
   port: number;
   client_dns: string[];
+  public_upstreams: string[];
+  public_domains: string[];
   blocklist_domains: string[];
   blocklist_files: InternalDnsBlocklistFileStatus[];
   blocklist_urls: InternalDnsBlocklistUrlStatus[];
   total: number;
+  cache_size: number;
+  log_queries: boolean;
+  local_records: string[];
+};
+
+export type InternalDnsSettingsRequest = {
+  enabled: boolean;
+  public_upstreams: string[];
+  public_domains: string[];
+  blocklist_domains: string[];
+  blocklist_files: string[];
+  blocklist_urls: string[];
   cache_size: number;
   log_queries: boolean;
   local_records: string[];
@@ -979,15 +993,7 @@ export function fetchInternalDnsStatus(token: string): Promise<InternalDnsStatus
 
 export function saveInternalDnsSettings(
   token: string,
-  payload: {
-    enabled: boolean;
-    blocklist_domains: string[];
-    blocklist_files: string[];
-    blocklist_urls: string[];
-    cache_size: number;
-    log_queries: boolean;
-    local_records: string[];
-  }
+  payload: InternalDnsSettingsRequest
 ): Promise<{ status: string; internal_dns: InternalDnsStatus }> {
   return requestJson<{ status: string; internal_dns: InternalDnsStatus }>(
     "/api/internal-dns/settings",
@@ -1266,19 +1272,50 @@ export function saveServerSettings(
   );
 }
 
+export type AuthMethodsSettingsPayload = {
+  password_enabled: boolean;
+  certificate_enabled: boolean;
+  otp_enabled: boolean;
+  otp_ocserv_oath_auth: boolean;
+  otp_issuer: string;
+  otp_send_by_email: boolean;
+  otp_send_by_telegram: boolean;
+  otp_smtp_host: string | null;
+  otp_smtp_port: number;
+  otp_smtp_username: string | null;
+  otp_smtp_password: string | null;
+  otp_smtp_from: string | null;
+  otp_smtp_starttls: boolean;
+  otp_smtp_test_recipient: string | null;
+  otp_telegram_bot_token: string | null;
+  otp_telegram_chat_id: string | null;
+};
+
 export function saveAuthMethodsSettings(
   token: string,
-  payload: {
-    password_enabled: boolean;
-    certificate_enabled: boolean;
-    otp_enabled: boolean;
-    otp_ocserv_oath_auth: boolean;
-    otp_issuer: string;
-    otp_send_by_email: boolean;
-    otp_send_by_telegram: boolean;
-  }
+  payload: AuthMethodsSettingsPayload
 ): Promise<{ status: string }> {
   return requestJson<{ status: string }>("/api/server/auth-settings", token, {
+    method: "POST",
+    body: body(payload)
+  });
+}
+
+export function testOtpEmail(
+  token: string,
+  payload: AuthMethodsSettingsPayload
+): Promise<{ status: string }> {
+  return requestJson<{ status: string }>("/api/server/auth-settings/test-email", token, {
+    method: "POST",
+    body: body(payload)
+  });
+}
+
+export function testOtpTelegram(
+  token: string,
+  payload: AuthMethodsSettingsPayload
+): Promise<{ status: string }> {
+  return requestJson<{ status: string }>("/api/server/auth-settings/test-telegram", token, {
     method: "POST",
     body: body(payload)
   });
