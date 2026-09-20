@@ -403,8 +403,15 @@ label span,
 }
 
 .upstream-status-cell {
+  align-items: start;
   display: grid;
   gap: 4px;
+  justify-items: start;
+}
+
+.upstream-status-cell .status {
+  justify-content: center;
+  min-width: 92px;
 }
 
 .split {
@@ -1154,6 +1161,18 @@ textarea:focus {
   flex: none;
 }
 
+.experimental-notice {
+  align-items: center;
+  border-color: var(--warning);
+  display: flex;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.experimental-notice p {
+  margin-bottom: 0;
+}
+
 .config-disabled-note {
   background: var(--surface-2);
   border: 1px dashed var(--border);
@@ -1267,6 +1286,23 @@ textarea:focus {
 
 .otp-configuration-body {
   gap: 12px;
+}
+
+.field-heading {
+  display: grid;
+  gap: 2px;
+  grid-column: 1 / -1;
+}
+
+.diagnostic-probe summary {
+  cursor: pointer;
+  font-weight: 750;
+}
+
+.diagnostic-probe code {
+  display: block;
+  margin-top: 8px;
+  max-width: 420px;
 }
 
 .nested-settings-details {

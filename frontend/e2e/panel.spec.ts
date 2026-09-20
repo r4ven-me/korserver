@@ -362,7 +362,7 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
     ["Server", "VPN server"],
     ["Authentication", "Authentication methods"],
     ["Certificates", "Authority certificates"],
-    ["Identity", "OIDC connector"],
+    ["Identity · Experimental", "OIDC connector"],
     ["Upstream", "Profiles"],
     ["DNS", "DNS"],
     ["Web / API", "Web / API panel"],
@@ -384,9 +384,8 @@ test("Authentication OTP delivery credentials can be tested with current form va
   await page.getByRole("button", { name: "Authentication", exact: true }).click();
 
   await expect(page.getByText("OTP configuration", { exact: true })).toBeVisible();
-  await expect(page.getByLabel("Enable email delivery")).not.toBeVisible();
-  await page.getByText("OTP configuration", { exact: true }).click();
-  await page.getByText("Email delivery", { exact: true }).click();
+  await expect(page.getByLabel("Enable email delivery")).toBeVisible();
+  await page.getByRole("tab", { name: "Email delivery" }).click();
   await page.getByLabel("Enable email delivery").check();
   await expect(page.getByLabel("SMTP host")).toBeVisible();
   await expect(page.getByRole("button", { name: "Test email" })).toBeDisabled();
@@ -447,6 +446,7 @@ test("DNS uses one atomic draft and keeps Save separate from Apply", async ({ pa
   await expect(page.getByRole("tab", { name: "Resolver functions" })).toHaveAttribute("aria-selected", "true");
   await page.getByLabel("Upstream DNS servers").fill("1.1.1.1\n8.8.8.8");
   await page.getByLabel("Domains", { exact: true }).fill("example.com\nexample.net");
+  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect.poll(() => mutations.find((entry) => entry.path === "/api/internal-dns/settings"))
@@ -462,13 +462,10 @@ test("DNS uses one atomic draft and keeps Save separate from Apply", async ({ pa
     public_upstreams: ["1.1.1.1", "8.8.8.8"],
     public_domains: ["example.com", "example.net"]
   });
-  expect(mutations.some((entry) => entry.path === "/api/internal-dns/apply")).toBe(false);
-
-  await page
-    .getByRole("button", { name: "Apply DNS changes (disconnects active clients)" })
-    .click();
   await expect.poll(() => mutations.some((entry) => entry.path === "/api/internal-dns/apply"))
     .toBe(true);
+  await expect(page.getByRole("button", { name: "Apply DNS changes (disconnects active clients)" }))
+    .toHaveCount(0);
 });
 
 test("server-side routing controls in Upstream settings are inert until Upstream is enabled", async ({
@@ -865,7 +862,7 @@ test("making a different profile default asks for confirmation before switching"
   });
   await page
     .locator(".upstream-profiles-panel tbody tr", { hasText: "bravo" })
-    .getByRole("button", { name: "Make default", exact: true })
+    .getByRole("button", { name: "Make default profile", exact: true })
     .click();
 
   expect(dialogMessage).toContain("bravo");
@@ -901,7 +898,7 @@ test("toggling host-traffic routing sends host_traffic/host_mode to the API", as
     .filter({ hasText: "Host mode" })
     .locator("select")
     .selectOption("split");
-  await dialog.getByRole("button", { name: "Save settings", exact: true }).click();
+  await dialog.locator('button[type="submit"]').click();
   // onSave awaits three sequential saves (upstream settings, check host,
   // routing settings) before closing the dialog -- wait for that instead of
   // a fixed timeout, since the routing/settings POST is the last of the three.
@@ -1041,7 +1038,7 @@ test("turning off default client routing sends client_traffic: false", async ({ 
   await expect(
     dialog.locator("label").filter({ hasText: "Mode" }).first().locator("select")
   ).toHaveCount(0);
-  await dialog.getByRole("button", { name: "Save settings", exact: true }).click();
+  await dialog.getByRole("button", { name: "Save", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 
   const saved = mutations.find(

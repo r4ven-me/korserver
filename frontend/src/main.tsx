@@ -235,7 +235,7 @@ const configSections: Array<{ id: ConfigSection; label: string }> = [
   { id: "server", label: "Server" },
   { id: "certificates", label: "Certificates" },
   { id: "auth", label: "Authentication" },
-  { id: "identity", label: "Identity" },
+  { id: "identity", label: "Identity · Experimental" },
   { id: "upstream", label: "Upstream" },
   { id: "internal_dns", label: "DNS" },
   { id: "web", label: "Web / API" },
@@ -1468,6 +1468,9 @@ function App() {
   };
 
   const handleSaveInternalDnsSettings = async () => {
+    if (!confirmAction("Save and apply DNS settings now? Active VPN clients will be disconnected and must reconnect.")) {
+      return;
+    }
     const result = await runAction(
       "internal-dns-settings",
       "DNS settings saved",
@@ -1492,7 +1495,15 @@ function App() {
         })
     );
     if (result !== null) {
-      recordCommand("internal_dns", syntheticCommand(["korctl", "dns", "settings"], "saved"));
+      const applied = await runAction(
+        "internal-dns-apply",
+        "DNS settings saved and applied",
+        (token) => applyInternalDns(token)
+      );
+      recordCommand(
+        "internal_dns",
+        applied ?? syntheticCommand(["korctl", "dns", "settings"], "saved")
+      );
     }
   };
 
@@ -2015,7 +2026,7 @@ function App() {
             </label>
             <span className="status ok">Connected as {authInfo.username}</span>
             <IconButton
-              label="Refresh"
+              label="Reload panel data"
               icon={RefreshCw}
               busy={loading}
               onClick={() =>
@@ -4871,10 +4882,9 @@ function InternalDnsView({
       </SettingsTabs>
 
       <section className="panel dns-actions">
-        <div><strong>Save stores the draft only.</strong><p className="muted-line">Apply is separate because active VPN clients will be disconnected.</p></div>
+        <div><strong>Save and apply DNS settings.</strong><p className="muted-line">You will be asked to confirm because active VPN clients must reconnect.</p></div>
         <div className="toolbar">
-          <ActionButton label="Save" icon={Save} primary busy={busy === "internal-dns-settings"} onClick={onSave} />
-          <ActionButton label="Apply DNS changes (disconnects active clients)" icon={RefreshCw} danger busy={busy === "internal-dns-apply"} onClick={onApply} />
+          <ActionButton label="Save" icon={Save} primary busy={busy === "internal-dns-settings" || busy === "internal-dns-apply"} onClick={onSave} />
         </div>
       </section>
       {commandOutput && (
@@ -4937,6 +4947,17 @@ function IdentityView({
 }) {
   return (
     <div className="view-stack">
+      <section className="panel experimental-notice" role="note">
+        <div>
+          <strong>Experimental feature</strong>
+          <p className="muted-line">
+            Identity, OIDC connectors and group-policy integration have not been validated in a
+            production environment yet. Test the complete authentication flow before relying on
+            this section for access control.
+          </p>
+        </div>
+        <Pill kind="warning">Experimental</Pill>
+      </section>
       <section className="panel">
         <div className="panel-header">
           <h2>Group routing</h2>
@@ -5496,12 +5517,11 @@ function UpstreamView({
                       onClick={() => onConnectProfile(profile.name)}
                     />
                   )}
-                  <ActionButton
-                    label={isDefault ? "Default" : "Make default"}
+                  <IconButton
+                    label={isDefault ? "Default profile" : "Make default profile"}
                     icon={isDefault ? CheckCircle2 : Star}
                     disabled={isDefault || !profile.enabled}
                     busy={busy === `switch-${profile.name}`}
-                    title="Make this profile the default: redirection rules re-point to its tunnel, connections stay up"
                     onClick={() => onSwitch(profile.name)}
                   />
                   <IconButton
@@ -6006,7 +6026,7 @@ function UpstreamSettingsDialog({
               type="submit"
             >
               <Save size={18} aria-hidden="true" />
-              <span>Save settings</span>
+              <span>Save</span>
             </button>
           </div>
         </form>
@@ -7186,7 +7206,7 @@ function ConfigView({
         )}
 
         <div className="panel-footer config-save-footer">
-          <ActionButton label="Save VPN server settings" icon={Save} primary busy={busy === "server-config-settings"} onClick={onSaveServerSettings} />
+          <ActionButton label="Save" icon={Save} primary busy={busy === "server-config-settings"} onClick={onSaveServerSettings} />
         </div>
       </section>
       )}
@@ -7214,13 +7234,18 @@ function ConfigView({
 
         {authMethodsDraft.otpEnabled && (
           <div className="collapsible-settings-list">
-            <details className="settings-details">
-              <summary>OTP configuration</summary>
+            <section className="settings-tab-panel otp-configuration-body">
+              <div className="settings-grid">
+                <div className="field-heading">
+                  <strong>OTP configuration</strong>
+                  <span className="muted-line">OTP secret management is enabled. Runtime enforcement is configured below.</span>
+                </div>
+              </div>
               <div className="settings-details-body otp-configuration-body">
                 <div className="settings-grid">
                   <label className="switch" title="Use ocserv's built-in oath auth backend for OTP">
                     <input checked={authMethodsDraft.otpOcservOathAuth} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpOcservOathAuth: event.target.checked })} type="checkbox" />
-                    <span>Use ocserv OATH authentication</span>
+                    <span>Require OTP during VPN login (ocserv OATH backend)</span>
                   </label>
                   <label>
                     <span>OTP issuer</span>
@@ -7273,7 +7298,7 @@ function ConfigView({
                 </details>
                 </SettingsTabs>
               </div>
-            </details>
+            </section>
           </div>
         )}
 
@@ -7334,7 +7359,7 @@ function ConfigView({
         )}
 
         <div className="panel-footer config-save-footer">
-          <ActionButton label="Save Web / API settings" icon={Save} primary busy={busy === "web-config-settings"} onClick={onSaveWebSettings} />
+          <ActionButton label="Save" icon={Save} primary busy={busy === "web-config-settings"} onClick={onSaveWebSettings} />
         </div>
       </section>
       <AdminTotpPanel onNotice={onNotice} />
@@ -7415,8 +7440,10 @@ function ConfigView({
       )}
 
       {section === "advanced" && (
-      <>
-      <section className="panel">
+      <SettingsTabs ariaLabel="Advanced configuration">
+      <details>
+        <summary>Persistent YAML</summary>
+        <section className="panel">
         <div className="panel-header">
           <div>
             <h2>Persistent YAML</h2>
@@ -7456,7 +7483,10 @@ function ConfigView({
           />
         </div>
       </section>
-      <section className="panel">
+      </details>
+      <details>
+        <summary>Rendered files</summary>
+        <section className="panel">
         <div className="panel-header">
           <h2>Rendered files</h2>
         </div>
@@ -7494,11 +7524,15 @@ function ConfigView({
           />
         </div>
       </section>
-      <section className="panel">
-        <h2>Effective config</h2>
-        <pre>{JSON.stringify(config ?? {}, null, 2)}</pre>
-      </section>
-      </>
+      </details>
+      <details>
+        <summary>Effective config</summary>
+        <section className="panel">
+          <h2>Effective config</h2>
+          <pre>{JSON.stringify(config ?? {}, null, 2)}</pre>
+        </section>
+      </details>
+      </SettingsTabs>
       )}
     </div>
   );
@@ -7510,7 +7544,12 @@ function DiagnosticsView({ diagnostics }: { diagnostics: DiagnosticResult | null
       <Table columns={["Probe", "Status", "Stdout", "Stderr"]} empty="No diagnostics">
         {Object.entries(diagnostics ?? {}).map(([name, result]) => (
           <tr key={name}>
-            <td>{name}</td>
+            <td>
+              <details className="diagnostic-probe">
+                <summary>{name}</summary>
+                <code>{result.argv.join(" ")}</code>
+              </details>
+            </td>
             <td>
               <Pill kind={diagnosticKind(result)}>{result.returncode}</Pill>
             </td>
