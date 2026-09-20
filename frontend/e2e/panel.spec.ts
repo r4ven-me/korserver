@@ -383,9 +383,11 @@ test("Authentication OTP delivery credentials can be tested with current form va
   await page.getByRole("button", { name: "Config", exact: true }).click();
   await page.getByRole("button", { name: "Authentication", exact: true }).click();
 
-  await expect(page.getByLabel("Send OTP by email")).not.toBeVisible();
+  await expect(page.getByText("OTP configuration", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Enable email delivery")).not.toBeVisible();
+  await page.getByText("OTP configuration", { exact: true }).click();
   await page.getByText("Email delivery", { exact: true }).click();
-  await page.getByLabel("Send OTP by email").check();
+  await page.getByLabel("Enable email delivery").check();
   await expect(page.getByLabel("SMTP host")).toBeVisible();
   await expect(page.getByRole("button", { name: "Test email" })).toBeDisabled();
   await page.getByLabel("SMTP host").fill("smtp.example.com");
@@ -396,9 +398,9 @@ test("Authentication OTP delivery credentials can be tested with current form va
   await page.getByLabel("Test recipient").fill("admin@example.com");
   await page.getByRole("button", { name: "Test email" }).click();
 
-  await expect(page.getByLabel("Send OTP by Telegram")).not.toBeVisible();
+  await expect(page.getByLabel("Enable Telegram delivery")).not.toBeVisible();
   await page.getByText("Telegram delivery", { exact: true }).click();
-  await page.getByLabel("Send OTP by Telegram").check();
+  await page.getByLabel("Enable Telegram delivery").check();
   await expect(page.getByRole("button", { name: "Test Telegram" })).toBeDisabled();
   await page.getByLabel("Telegram bot token").fill("bot-secret");
   await expect(page.getByLabel("Telegram bot token")).toHaveAttribute("type", "password");

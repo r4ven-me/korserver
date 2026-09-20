@@ -1179,6 +1179,18 @@ textarea:focus {
   padding: 0;
 }
 
+.otp-configuration-body {
+  gap: 12px;
+}
+
+.nested-settings-details {
+  background: var(--surface);
+}
+
+.nested-settings-details > summary {
+  padding-block: 12px;
+}
+
 .otp-delivery-grid {
   align-items: end;
 }

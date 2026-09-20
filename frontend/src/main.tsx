@@ -7429,64 +7429,68 @@ function ConfigView({
           </label>
         </div>
 
-        <div className="collapsible-settings-list">
-          <details className="settings-details">
-            <summary>OTP configuration</summary>
-            <div className="settings-grid settings-details-body">
-              <label className="switch" title="Use ocserv's built-in oath auth backend for OTP">
-                <input checked={authMethodsDraft.otpOcservOathAuth} disabled={!authMethodsDraft.otpEnabled} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpOcservOathAuth: event.target.checked })} type="checkbox" />
-                <span>Use ocserv OATH authentication</span>
-              </label>
-              <label>
-                <span>OTP issuer</span>
-                <input disabled={!authMethodsDraft.otpEnabled} value={authMethodsDraft.otpIssuer} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpIssuer: event.target.value })} />
-              </label>
-            </div>
-          </details>
-
-          <details className="settings-details">
-            <summary>Email delivery</summary>
-            <div className="settings-details-body">
-              <label className="switch">
-                <input checked={authMethodsDraft.otpSendByEmail} disabled={!authMethodsDraft.otpEnabled} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSendByEmail: event.target.checked })} type="checkbox" />
-                <span>Send OTP by email</span>
-              </label>
-              <fieldset disabled={!authMethodsDraft.otpEnabled || !authMethodsDraft.otpSendByEmail}>
-                <div className="settings-grid otp-delivery-grid">
-                  <label><span>SMTP host</span><input value={authMethodsDraft.otpSmtpHost} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpHost: event.target.value })} /></label>
-                  <label><span>SMTP port</span><input min={1} max={65535} type="number" value={authMethodsDraft.otpSmtpPort} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpPort: Number(event.target.value) })} /></label>
-                  <label><span>SMTP username</span><input value={authMethodsDraft.otpSmtpUsername} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpUsername: event.target.value })} /></label>
-                  <label><span>SMTP password</span><input type="password" placeholder="Blank preserves saved secret" value={authMethodsDraft.otpSmtpPassword} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpPassword: event.target.value })} /></label>
-                  <label><span>From address</span><input type="email" value={authMethodsDraft.otpSmtpFrom} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpFrom: event.target.value })} /></label>
-                  <label className="switch"><input checked={authMethodsDraft.otpSmtpStarttls} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpStarttls: event.target.checked })} type="checkbox" /><span>Use STARTTLS</span></label>
-                  <label><span>Test recipient</span><input type="email" value={authMethodsDraft.otpSmtpTestRecipient} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpTestRecipient: event.target.value })} /></label>
+        {authMethodsDraft.otpEnabled && (
+          <div className="collapsible-settings-list">
+            <details className="settings-details">
+              <summary>OTP configuration</summary>
+              <div className="settings-details-body otp-configuration-body">
+                <div className="settings-grid">
+                  <label className="switch" title="Use ocserv's built-in oath auth backend for OTP">
+                    <input checked={authMethodsDraft.otpOcservOathAuth} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpOcservOathAuth: event.target.checked })} type="checkbox" />
+                    <span>Use ocserv OATH authentication</span>
+                  </label>
+                  <label>
+                    <span>OTP issuer</span>
+                    <input value={authMethodsDraft.otpIssuer} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpIssuer: event.target.value })} />
+                  </label>
                 </div>
-              </fieldset>
-              <div className="settings-actions">
-                <ActionButton label="Test email" icon={Send} busy={busy === "auth-methods-test-email"} disabled={!authMethodsDraft.otpEnabled || !authMethodsDraft.otpSendByEmail || !authMethodsDraft.otpSmtpHost.trim() || authMethodsDraft.otpSmtpPort < 1 || authMethodsDraft.otpSmtpPort > 65535 || !authMethodsDraft.otpSmtpFrom.trim() || !authMethodsDraft.otpSmtpTestRecipient.trim()} onClick={onTestOtpEmail} />
-              </div>
-            </div>
-          </details>
 
-          <details className="settings-details">
-            <summary>Telegram delivery</summary>
-            <div className="settings-details-body">
-              <label className="switch">
-                <input checked={authMethodsDraft.otpSendByTelegram} disabled={!authMethodsDraft.otpEnabled} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSendByTelegram: event.target.checked })} type="checkbox" />
-                <span>Send OTP by Telegram</span>
-              </label>
-              <fieldset disabled={!authMethodsDraft.otpEnabled || !authMethodsDraft.otpSendByTelegram}>
-                <div className="settings-grid otp-delivery-grid">
-                  <label><span>Telegram bot token</span><input type="password" placeholder="Blank preserves saved secret" value={authMethodsDraft.otpTelegramBotToken} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpTelegramBotToken: event.target.value })} /></label>
-                  <label><span>Telegram chat ID</span><input value={authMethodsDraft.otpTelegramChatId} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpTelegramChatId: event.target.value })} /></label>
-                </div>
-              </fieldset>
-              <div className="settings-actions">
-                <ActionButton label="Test Telegram" icon={Send} busy={busy === "auth-methods-test-telegram"} disabled={!authMethodsDraft.otpEnabled || !authMethodsDraft.otpSendByTelegram || !authMethodsDraft.otpTelegramBotToken || !authMethodsDraft.otpTelegramChatId.trim()} onClick={onTestOtpTelegram} />
+                <details className="settings-details nested-settings-details">
+                  <summary>Email delivery</summary>
+                  <div className="settings-details-body">
+                    <label className="switch">
+                      <input checked={authMethodsDraft.otpSendByEmail} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSendByEmail: event.target.checked })} type="checkbox" />
+                      <span>Enable email delivery</span>
+                    </label>
+                    <fieldset disabled={!authMethodsDraft.otpSendByEmail}>
+                      <div className="settings-grid otp-delivery-grid">
+                        <label><span>SMTP host</span><input value={authMethodsDraft.otpSmtpHost} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpHost: event.target.value })} /></label>
+                        <label><span>SMTP port</span><input min={1} max={65535} type="number" value={authMethodsDraft.otpSmtpPort} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpPort: Number(event.target.value) })} /></label>
+                        <label><span>SMTP username</span><input value={authMethodsDraft.otpSmtpUsername} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpUsername: event.target.value })} /></label>
+                        <label><span>SMTP password</span><input type="password" placeholder="Blank preserves saved secret" value={authMethodsDraft.otpSmtpPassword} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpPassword: event.target.value })} /></label>
+                        <label><span>From address</span><input type="email" value={authMethodsDraft.otpSmtpFrom} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpFrom: event.target.value })} /></label>
+                        <label className="switch"><input checked={authMethodsDraft.otpSmtpStarttls} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpStarttls: event.target.checked })} type="checkbox" /><span>Use STARTTLS</span></label>
+                        <label><span>Test recipient</span><input type="email" value={authMethodsDraft.otpSmtpTestRecipient} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSmtpTestRecipient: event.target.value })} /></label>
+                      </div>
+                    </fieldset>
+                    <div className="settings-actions">
+                      <ActionButton label="Test email" icon={Send} busy={busy === "auth-methods-test-email"} disabled={!authMethodsDraft.otpSendByEmail || !authMethodsDraft.otpSmtpHost.trim() || authMethodsDraft.otpSmtpPort < 1 || authMethodsDraft.otpSmtpPort > 65535 || !authMethodsDraft.otpSmtpFrom.trim() || !authMethodsDraft.otpSmtpTestRecipient.trim()} onClick={onTestOtpEmail} />
+                    </div>
+                  </div>
+                </details>
+
+                <details className="settings-details nested-settings-details">
+                  <summary>Telegram delivery</summary>
+                  <div className="settings-details-body">
+                    <label className="switch">
+                      <input checked={authMethodsDraft.otpSendByTelegram} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpSendByTelegram: event.target.checked })} type="checkbox" />
+                      <span>Enable Telegram delivery</span>
+                    </label>
+                    <fieldset disabled={!authMethodsDraft.otpSendByTelegram}>
+                      <div className="settings-grid otp-delivery-grid">
+                        <label><span>Telegram bot token</span><input type="password" placeholder="Blank preserves saved secret" value={authMethodsDraft.otpTelegramBotToken} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpTelegramBotToken: event.target.value })} /></label>
+                        <label><span>Telegram chat ID</span><input value={authMethodsDraft.otpTelegramChatId} onChange={(event) => onAuthMethodsDraftChange({ ...authMethodsDraft, otpTelegramChatId: event.target.value })} /></label>
+                      </div>
+                    </fieldset>
+                    <div className="settings-actions">
+                      <ActionButton label="Test Telegram" icon={Send} busy={busy === "auth-methods-test-telegram"} disabled={!authMethodsDraft.otpSendByTelegram || !authMethodsDraft.otpTelegramBotToken || !authMethodsDraft.otpTelegramChatId.trim()} onClick={onTestOtpTelegram} />
+                    </div>
+                  </div>
+                </details>
               </div>
-            </div>
-          </details>
-        </div>
+            </details>
+          </div>
+        )}
 
         <div className="panel-footer">
           <ActionButton label="Save" icon={Save} primary busy={busy === "auth-methods-settings"} onClick={onSaveAuthMethodsSettings} />
