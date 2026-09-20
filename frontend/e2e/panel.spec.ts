@@ -359,7 +359,7 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
 
   for (const [pill, heading] of [
     ["System", "General"],
-    ["Server", "Server (VPN)"],
+    ["Server", "VPN server"],
     ["Authentication", "Authentication methods"],
     ["Certificates", "Authority certificates"],
     ["Identity", "OIDC connector"],

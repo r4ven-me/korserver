@@ -1141,6 +1141,40 @@ textarea:focus {
   margin: 12px 0 0;
 }
 
+.config-section-panel {
+  display: grid;
+  gap: 18px;
+}
+
+.config-section-header {
+  align-items: center;
+}
+
+.config-section-header .switch {
+  flex: none;
+}
+
+.config-disabled-note {
+  background: var(--surface-2);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  color: var(--muted);
+  margin: 0;
+  padding: 14px 16px;
+}
+
+.config-save-footer {
+  margin-top: 0;
+}
+
+.nested-fieldset {
+  border: 0;
+  grid-column: 1 / -1;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
 .auth-method-switches {
   margin-bottom: 18px;
 }

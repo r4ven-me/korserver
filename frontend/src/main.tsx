@@ -7114,296 +7114,73 @@ function ConfigView({
   return (
     <div className="view-stack">
       {section === "server" && (
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Server (VPN)</h2>
-        </div>
-        <div className="settings-grid">
+      <section className="panel config-section-panel">
+        <div className="panel-header config-section-header">
+          <div>
+            <h2>VPN server</h2>
+            <p className="muted-line">Listener, client network and ocserv behavior.</p>
+          </div>
           <label className="switch" title="Whether ocserv itself runs in this container">
-            <input
-              checked={serverSettingsDraft.enabled}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, enabled: event.target.checked })
-              }
-              type="checkbox"
-            />
+            <input checked={serverSettingsDraft.enabled} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, enabled: event.target.checked })} type="checkbox" />
             <span>Enabled</span>
           </label>
-          <label>
-            <span>Listen</span>
-            <input
-              value={serverSettingsDraft.listen}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, listen: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>Port</span>
-            <input
-              type="number"
-              value={serverSettingsDraft.port}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  port: Math.max(1, Number(event.target.value) || 443)
-                })
-              }
-            />
-          </label>
-          <label className="switch">
-            <input
-              checked={serverSettingsDraft.udpEnabled}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  udpEnabled: event.target.checked
-                })
-              }
-              type="checkbox"
-            />
-            <span>UDP enabled</span>
-          </label>
-          <label>
-            <span>TUN device</span>
-            <input
-              value={serverSettingsDraft.device}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, device: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>Common name</span>
-            <input
-              value={serverSettingsDraft.cn}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, cn: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>Realm</span>
-            <input
-              value={serverSettingsDraft.realm}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, realm: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>IPv4 network</span>
-            <input
-              value={serverSettingsDraft.ipv4Network}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  ipv4Network: event.target.value
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>Max clients</span>
-            <input
-              type="number"
-              value={serverSettingsDraft.maxClients}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  maxClients: Math.max(1, Number(event.target.value) || 128)
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>Max same clients</span>
-            <input
-              type="number"
-              value={serverSettingsDraft.maxSameClients}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  maxSameClients: Math.max(1, Number(event.target.value) || 2)
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>Keepalive (s)</span>
-            <input
-              type="number"
-              value={serverSettingsDraft.keepalive}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  keepalive: Math.max(0, Number(event.target.value) || 32400)
-                })
-              }
-            />
-          </label>
-          <label title="0-1: errors only. 2: adds per-user connect/disconnect events. 3+: verbose debug.">
-            <span>Debug level (0-9)</span>
-            <input
-              type="number"
-              min={0}
-              max={9}
-              value={serverSettingsDraft.debugLevel}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  debugLevel: Math.min(9, Math.max(0, Number(event.target.value) || 0))
-                })
-              }
-            />
-          </label>
-          <label className="switch">
-            <input
-              checked={serverSettingsDraft.compression}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  compression: event.target.checked
-                })
-              }
-              type="checkbox"
-            />
-            <span>Compression</span>
-          </label>
-          <label className="switch">
-            <input
-              checked={serverSettingsDraft.ciscoClientCompat}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  ciscoClientCompat: event.target.checked
-                })
-              }
-              type="checkbox"
-            />
-            <span>Cisco client compat</span>
-          </label>
-          <label>
-            <span>DNS (one per line)</span>
-            <textarea
-              rows={2}
-              value={serverSettingsDraft.dns}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, dns: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>
-              Search domains
-              <KorclientHint text="Doubles as the server-wide split-DNS list (rendered as split-dns directives). korclient resolves these through its own dnsmasq and routes the results through the tunnel automatically; a stock OpenConnect client only gets DNS-suffix scoping." />
-            </span>
-            <textarea
-              rows={2}
-              value={serverSettingsDraft.searchDomains}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  searchDomains: event.target.value
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>
-              Routes
-              <KorclientHint text="korclient applies this as an nftables policy-route (kept out of the OS routing table). A stock OpenConnect client gets it as a plain pushed route instead." />
-            </span>
-            <textarea
-              rows={2}
-              value={serverSettingsDraft.routes}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, routes: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>No routes</span>
-            <textarea
-              rows={2}
-              value={serverSettingsDraft.noRoutes}
-              onChange={(event) =>
-                onServerSettingsDraftChange({ ...serverSettingsDraft, noRoutes: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>Connect script</span>
-            <input
-              value={serverSettingsDraft.connectScript}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  connectScript: event.target.value
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>Disconnect script</span>
-            <input
-              value={serverSettingsDraft.disconnectScript}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  disconnectScript: event.target.value
-                })
-              }
-            />
-          </label>
-          <label className="switch">
-            <input
-              checked={serverSettingsDraft.camouflageEnabled}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  camouflageEnabled: event.target.checked
-                })
-              }
-              type="checkbox"
-            />
-            <span>Camouflage</span>
-          </label>
-          <label>
-            <span>Camouflage secret</span>
-            <input
-              disabled={!serverSettingsDraft.camouflageEnabled}
-              value={serverSettingsDraft.camouflageSecret}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  camouflageSecret: event.target.value
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>Camouflage realm</span>
-            <input
-              disabled={!serverSettingsDraft.camouflageEnabled}
-              value={serverSettingsDraft.camouflageRealm}
-              onChange={(event) =>
-                onServerSettingsDraftChange({
-                  ...serverSettingsDraft,
-                  camouflageRealm: event.target.value
-                })
-              }
-            />
-          </label>
         </div>
-        <div className="panel-footer">
-          <ActionButton
-            label="Save"
-            icon={Save}
-            primary
-            busy={busy === "server-config-settings"}
-            onClick={onSaveServerSettings}
-          />
+
+        {!serverSettingsDraft.enabled && <p className="config-disabled-note">Enable the VPN server to edit its dependent settings.</p>}
+        {serverSettingsDraft.enabled && (
+          <div className="collapsible-settings-list">
+            <details className="settings-details">
+              <summary>Listener &amp; identity</summary>
+              <div className="settings-grid settings-details-body">
+                <label><span>Listen address</span><input value={serverSettingsDraft.listen} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, listen: event.target.value })} /></label>
+                <label><span>Port</span><input type="number" min={1} max={65535} value={serverSettingsDraft.port} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, port: Math.max(1, Number(event.target.value) || 443) })} /></label>
+                <label className="switch"><input checked={serverSettingsDraft.udpEnabled} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, udpEnabled: event.target.checked })} type="checkbox" /><span>Enable UDP transport</span></label>
+                <label><span>TUN device</span><input value={serverSettingsDraft.device} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, device: event.target.value })} /></label>
+                <label><span>Common name</span><input value={serverSettingsDraft.cn} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, cn: event.target.value })} /></label>
+                <label><span>Authentication realm</span><input value={serverSettingsDraft.realm} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, realm: event.target.value })} /></label>
+              </div>
+            </details>
+
+            <details className="settings-details">
+              <summary>Client network</summary>
+              <div className="settings-grid settings-details-body">
+                <label><span>IPv4 network</span><input value={serverSettingsDraft.ipv4Network} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, ipv4Network: event.target.value })} /></label>
+                <label><span>DNS servers (one per line)</span><textarea rows={3} value={serverSettingsDraft.dns} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, dns: event.target.value })} /></label>
+                <label><span>Search domains <KorclientHint text="Also used as the server-wide split-DNS list. korclient resolves these through its own dnsmasq; stock OpenConnect clients receive DNS suffix scoping." /></span><textarea rows={3} value={serverSettingsDraft.searchDomains} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, searchDomains: event.target.value })} /></label>
+                <label><span>Routes <KorclientHint text="korclient applies these through nftables policy routing. Stock OpenConnect clients receive plain pushed routes." /></span><textarea rows={3} value={serverSettingsDraft.routes} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, routes: event.target.value })} /></label>
+                <label><span>Excluded routes</span><textarea rows={3} value={serverSettingsDraft.noRoutes} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, noRoutes: event.target.value })} /></label>
+              </div>
+            </details>
+
+            <details className="settings-details">
+              <summary>Limits &amp; compatibility</summary>
+              <div className="settings-grid settings-details-body">
+                <label><span>Maximum clients</span><input type="number" min={1} value={serverSettingsDraft.maxClients} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, maxClients: Math.max(1, Number(event.target.value) || 128) })} /></label>
+                <label><span>Maximum sessions per user</span><input type="number" min={1} value={serverSettingsDraft.maxSameClients} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, maxSameClients: Math.max(1, Number(event.target.value) || 2) })} /></label>
+                <label><span>Keepalive (seconds)</span><input type="number" min={0} value={serverSettingsDraft.keepalive} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, keepalive: Math.max(0, Number(event.target.value) || 32400) })} /></label>
+                <label title="0-1: errors only. 2: connect/disconnect events. 3+: verbose debug."><span>Debug level (0-9)</span><input type="number" min={0} max={9} value={serverSettingsDraft.debugLevel} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, debugLevel: Math.min(9, Math.max(0, Number(event.target.value) || 0)) })} /></label>
+                <label className="switch"><input checked={serverSettingsDraft.compression} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, compression: event.target.checked })} type="checkbox" /><span>Enable compression</span></label>
+                <label className="switch"><input checked={serverSettingsDraft.ciscoClientCompat} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, ciscoClientCompat: event.target.checked })} type="checkbox" /><span>Cisco client compatibility</span></label>
+              </div>
+            </details>
+
+            <details className="settings-details">
+              <summary>Hooks &amp; camouflage</summary>
+              <div className="settings-grid settings-details-body">
+                <label><span>Connect script</span><input value={serverSettingsDraft.connectScript} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, connectScript: event.target.value })} /></label>
+                <label><span>Disconnect script</span><input value={serverSettingsDraft.disconnectScript} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, disconnectScript: event.target.value })} /></label>
+                <label className="switch"><input checked={serverSettingsDraft.camouflageEnabled} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, camouflageEnabled: event.target.checked })} type="checkbox" /><span>Enable HTTP camouflage</span></label>
+                <fieldset className="settings-grid nested-fieldset" disabled={!serverSettingsDraft.camouflageEnabled}>
+                  <label><span>Camouflage secret</span><input value={serverSettingsDraft.camouflageSecret} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, camouflageSecret: event.target.value })} /></label>
+                  <label><span>Camouflage realm</span><input value={serverSettingsDraft.camouflageRealm} onChange={(event) => onServerSettingsDraftChange({ ...serverSettingsDraft, camouflageRealm: event.target.value })} /></label>
+                </fieldset>
+              </div>
+            </details>
+          </div>
+        )}
+
+        <div className="panel-footer config-save-footer">
+          <ActionButton label="Save VPN server settings" icon={Save} primary busy={busy === "server-config-settings"} onClick={onSaveServerSettings} />
         </div>
       </section>
       )}
@@ -7500,162 +7277,56 @@ function ConfigView({
 
       {section === "web" && (
       <>
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Web / API panel</h2>
-        </div>
-        <div className="settings-grid">
+      <section className="panel config-section-panel">
+        <div className="panel-header config-section-header">
+          <div>
+            <h2>Web / API panel</h2>
+            <p className="muted-line">Admin panel listener, sessions and browser terminal.</p>
+          </div>
           <label className="switch">
-            <input
-              checked={webSettingsDraft.enabled}
-              onChange={(event) =>
-                onWebSettingsDraftChange({ ...webSettingsDraft, enabled: event.target.checked })
-              }
-              type="checkbox"
-            />
+            <input checked={webSettingsDraft.enabled} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, enabled: event.target.checked })} type="checkbox" />
             <span>Enabled</span>
           </label>
-          <label>
-            <span>Listen</span>
-            <input
-              value={webSettingsDraft.listen}
-              onChange={(event) =>
-                onWebSettingsDraftChange({ ...webSettingsDraft, listen: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>Port</span>
-            <input
-              type="number"
-              value={webSettingsDraft.port}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  port: Math.max(1, Number(event.target.value) || 8443)
-                })
-              }
-            />
-          </label>
-          <label className="switch">
-            <input
-              checked={webSettingsDraft.tls}
-              onChange={(event) =>
-                onWebSettingsDraftChange({ ...webSettingsDraft, tls: event.target.checked })
-              }
-              type="checkbox"
-            />
-            <span>TLS</span>
-          </label>
-          <label className="switch" title="Only for use behind a trusted TLS-terminating reverse proxy">
-            <input
-              checked={webSettingsDraft.allowInsecureHttp}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  allowInsecureHttp: event.target.checked
-                })
-              }
-              type="checkbox"
-            />
-            <span>Allow insecure HTTP</span>
-          </label>
-          <label>
-            <span>Admin user</span>
-            <input
-              value={webSettingsDraft.adminUser}
-              onChange={(event) =>
-                onWebSettingsDraftChange({ ...webSettingsDraft, adminUser: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>Trusted proxies</span>
-            <textarea
-              rows={2}
-              value={webSettingsDraft.trustedProxies}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  trustedProxies: event.target.value
-                })
-              }
-            />
-          </label>
-          <label className="switch">
-            <input
-              checked={webSettingsDraft.terminalEnabled}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  terminalEnabled: event.target.checked
-                })
-              }
-              type="checkbox"
-            />
-            <span>Terminal enabled</span>
-          </label>
-          <label>
-            <span>Terminal idle timeout (s)</span>
-            <input
-              type="number"
-              value={webSettingsDraft.terminalIdleTimeout}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  terminalIdleTimeout: Math.max(60, Number(event.target.value) || 900)
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>Terminal max sessions</span>
-            <input
-              type="number"
-              value={webSettingsDraft.terminalMaxSessions}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  terminalMaxSessions: Math.max(1, Number(event.target.value) || 2)
-                })
-              }
-            />
-          </label>
-          <label>
-            <span>Session lifetime (s)</span>
-            <input
-              type="number"
-              value={webSettingsDraft.sessionLifetime}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  sessionLifetime: Math.max(300, Number(event.target.value) || 43200)
-                })
-              }
-            />
-          </label>
-          <label className="switch">
-            <input
-              checked={webSettingsDraft.sessionCookieSecure}
-              onChange={(event) =>
-                onWebSettingsDraftChange({
-                  ...webSettingsDraft,
-                  sessionCookieSecure: event.target.checked
-                })
-              }
-              type="checkbox"
-            />
-            <span>Secure session cookie</span>
-          </label>
         </div>
-        <div className="panel-footer">
-          <ActionButton
-            label="Save"
-            icon={Save}
-            primary
-            busy={busy === "web-config-settings"}
-            onClick={onSaveWebSettings}
-          />
+
+        {!webSettingsDraft.enabled && <p className="config-disabled-note">Enable the Web / API panel to edit its dependent settings.</p>}
+        {webSettingsDraft.enabled && (
+          <div className="collapsible-settings-list">
+            <details className="settings-details">
+              <summary>Listener &amp; transport security</summary>
+              <div className="settings-grid settings-details-body">
+                <label><span>Listen address</span><input value={webSettingsDraft.listen} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, listen: event.target.value })} /></label>
+                <label><span>Port</span><input type="number" min={1} max={65535} value={webSettingsDraft.port} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, port: Math.max(1, Number(event.target.value) || 8443) })} /></label>
+                <label className="switch"><input checked={webSettingsDraft.tls} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, tls: event.target.checked })} type="checkbox" /><span>Enable TLS</span></label>
+                <label className="switch" title="Only for use behind a trusted TLS-terminating reverse proxy"><input checked={webSettingsDraft.allowInsecureHttp} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, allowInsecureHttp: event.target.checked })} type="checkbox" /><span>Allow insecure HTTP</span></label>
+                <label><span>Trusted proxies (one per line)</span><textarea rows={3} value={webSettingsDraft.trustedProxies} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, trustedProxies: event.target.value })} /></label>
+              </div>
+            </details>
+
+            <details className="settings-details">
+              <summary>Administrator &amp; sessions</summary>
+              <div className="settings-grid settings-details-body">
+                <label><span>Admin username</span><input value={webSettingsDraft.adminUser} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, adminUser: event.target.value })} /></label>
+                <label><span>Session lifetime (seconds)</span><input type="number" min={300} value={webSettingsDraft.sessionLifetime} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, sessionLifetime: Math.max(300, Number(event.target.value) || 43200) })} /></label>
+                <label className="switch"><input checked={webSettingsDraft.sessionCookieSecure} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, sessionCookieSecure: event.target.checked })} type="checkbox" /><span>Secure session cookie</span></label>
+              </div>
+            </details>
+
+            <details className="settings-details">
+              <summary>Browser terminal</summary>
+              <div className="settings-details-body">
+                <label className="switch"><input checked={webSettingsDraft.terminalEnabled} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, terminalEnabled: event.target.checked })} type="checkbox" /><span>Enable browser terminal</span></label>
+                <fieldset className="settings-grid nested-fieldset" disabled={!webSettingsDraft.terminalEnabled}>
+                  <label><span>Idle timeout (seconds)</span><input type="number" min={60} value={webSettingsDraft.terminalIdleTimeout} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, terminalIdleTimeout: Math.max(60, Number(event.target.value) || 900) })} /></label>
+                  <label><span>Maximum sessions</span><input type="number" min={1} value={webSettingsDraft.terminalMaxSessions} onChange={(event) => onWebSettingsDraftChange({ ...webSettingsDraft, terminalMaxSessions: Math.max(1, Number(event.target.value) || 2) })} /></label>
+                </fieldset>
+              </div>
+            </details>
+          </div>
+        )}
+
+        <div className="panel-footer config-save-footer">
+          <ActionButton label="Save Web / API settings" icon={Save} primary busy={busy === "web-config-settings"} onClick={onSaveWebSettings} />
         </div>
       </section>
       <AdminTotpPanel onNotice={onNotice} />
