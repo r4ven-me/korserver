@@ -422,7 +422,20 @@ label span,
 
 .upstream-settings-form {
   display: grid;
-  gap: 16px;
+  gap: 12px;
+}
+
+.upstream-settings-section > .muted-line,
+.upstream-settings-section > label,
+.upstream-settings-section > .routing-substep {
+  margin-left: 16px;
+  margin-right: 16px;
+}
+
+.upstream-settings-section > .routing-substep,
+.upstream-settings-section > label:last-child,
+.upstream-settings-section > .muted-line:last-child {
+  margin-bottom: 16px;
 }
 
 .profile-routing-group {
@@ -1124,8 +1137,50 @@ textarea:focus {
   justify-content: space-between;
 }
 
-.dns-actions .command-block {
-  flex-basis: 100%;
+.dns-shared-note {
+  margin: 12px 0 0;
+}
+
+.auth-method-switches {
+  margin-bottom: 18px;
+}
+
+.collapsible-settings-list {
+  display: grid;
+  gap: 12px;
+}
+
+.settings-details {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.settings-details > summary {
+  cursor: pointer;
+  font-weight: 800;
+  padding: 14px 16px;
+}
+
+.settings-details[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.settings-details-body {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+}
+
+.settings-details-body fieldset {
+  border: 0;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+
+.otp-delivery-grid {
+  align-items: end;
 }
 
 .internal-dns-grid .blocklist-domains {

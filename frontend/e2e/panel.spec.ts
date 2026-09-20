@@ -383,6 +383,8 @@ test("Authentication OTP delivery credentials can be tested with current form va
   await page.getByRole("button", { name: "Config", exact: true }).click();
   await page.getByRole("button", { name: "Authentication", exact: true }).click();
 
+  await expect(page.getByLabel("Send OTP by email")).not.toBeVisible();
+  await page.getByText("Email delivery", { exact: true }).click();
   await page.getByLabel("Send OTP by email").check();
   await expect(page.getByLabel("SMTP host")).toBeVisible();
   await expect(page.getByRole("button", { name: "Test email" })).toBeDisabled();
@@ -390,10 +392,12 @@ test("Authentication OTP delivery credentials can be tested with current form va
   await page.getByLabel("SMTP username").fill("mailer");
   await page.getByLabel("SMTP password").fill("smtp-secret");
   await expect(page.getByLabel("SMTP password")).toHaveAttribute("type", "password");
-  await page.getByLabel("SMTP from address").fill("vpn@example.com");
-  await page.getByLabel("Test email recipient").fill("admin@example.com");
+  await page.getByLabel("From address").fill("vpn@example.com");
+  await page.getByLabel("Test recipient").fill("admin@example.com");
   await page.getByRole("button", { name: "Test email" }).click();
 
+  await expect(page.getByLabel("Send OTP by Telegram")).not.toBeVisible();
+  await page.getByText("Telegram delivery", { exact: true }).click();
   await page.getByLabel("Send OTP by Telegram").check();
   await expect(page.getByRole("button", { name: "Test Telegram" })).toBeDisabled();
   await page.getByLabel("Telegram bot token").fill("bot-secret");
@@ -438,6 +442,8 @@ test("DNS uses one atomic draft and keeps Save separate from Apply", async ({ pa
   await page.getByLabel("Enable local records").check();
   await page.getByLabel("Enable blocklist").check();
   await page.getByLabel("DNS servers (same as Server)").fill("9.9.9.9\n1.1.1.1");
+  await expect(page.getByLabel("Upstream DNS servers")).not.toBeVisible();
+  await page.getByText("Resolver functions", { exact: true }).click();
   await page.getByLabel("Upstream DNS servers").fill("1.1.1.1\n8.8.8.8");
   await page.getByLabel("Domains", { exact: true }).fill("example.com\nexample.net");
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -479,6 +485,8 @@ test("server-side routing controls in Upstream settings are inert until Upstream
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await dialog.getByText("VPN clients", { exact: true }).click();
+  await dialog.getByText("Server host", { exact: true }).click();
 
   // Not getByLabel("Mode"): same select accessible-name-concatenation quirk
   // as "Host mode" below (label text + currently selected option text).
@@ -496,7 +504,7 @@ test("server-side routing controls in Upstream settings are inert until Upstream
   // Infrastructure settings that matter regardless of Upstream (plain NAT
   // through the host uses main_interface/fwmark/table_id/nft_prefix too)
   // live under the collapsed "Advanced" details and stay editable.
-  await dialog.getByText("Advanced (rarely changed)").click();
+  await dialog.getByText("Advanced", { exact: true }).click();
   await expect(dialog.getByLabel("Main interface", { exact: true })).toBeEnabled();
   await expect(dialog.getByLabel("fwmark", { exact: true })).toBeEnabled();
 });
@@ -555,6 +563,7 @@ test("core management buttons call expected API endpoints with CSRF", async ({ p
   await page.getByRole("button", { name: "Config", exact: true }).click();
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("dialog").getByText("VPN clients", { exact: true }).click();
   const routesPanel = page.getByRole("heading", { name: "Routes", exact: true }).locator("../..");
   await routesPanel.locator("textarea").fill("10.30.0.0/16\n203.0.113.9");
   await routesPanel.getByRole("button", { name: "Save", exact: true }).click();
@@ -878,6 +887,7 @@ test("toggling host-traffic routing sends host_traffic/host_mode to the API", as
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await dialog.getByText("Server host", { exact: true }).click();
   await dialog
     .locator("label")
     .filter({ hasText: "Route this host" })
@@ -917,6 +927,7 @@ test("host split routing saves to its own dedicated routes endpoint, not the cli
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await dialog.getByText("Server host", { exact: true }).click();
 
   // Host routes/domains fields only appear once host traffic + split mode
   // are both on -- same progressive-disclosure pattern as the client's.
@@ -969,6 +980,7 @@ test("host split domains save to their own dedicated endpoint, not the client's"
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await dialog.getByText("Server host", { exact: true }).click();
 
   await dialog
     .locator("label")
@@ -1014,6 +1026,7 @@ test("turning off default client routing sends client_traffic: false", async ({ 
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog");
+  await dialog.getByText("VPN clients", { exact: true }).click();
 
   // On by default -- Mode select starts visible.
   await expect(
