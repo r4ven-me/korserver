@@ -767,7 +767,7 @@ def internal_dns_refresh(
 ) -> None:
     config = get_config()
     result = InternalDnsService(config).refresh_url_blocklist(url, preview=preview)
-    if result.saved and config.internal_dns.enabled:
+    if result.saved and config.internal_dns.blocklist_enabled:
         ConfigService().write_rendered_files(config)
     typer.echo(
         json.dumps(

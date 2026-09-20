@@ -463,7 +463,9 @@ routing:
       - corp.example.com
 
 internal_dns:
-  enabled: true
+  resolver_enabled: true
+  blocklist_enabled: true
+  local_records_enabled: true
   blocklist_domains:
     - ads.example.com
     - tracker.example.net

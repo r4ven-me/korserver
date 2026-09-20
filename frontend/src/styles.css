@@ -1056,6 +1056,78 @@ textarea:focus {
   margin-top: 3px;
 }
 
+.dns-chain {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 20px 0;
+}
+
+.dns-chain-node {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 750;
+  padding: 10px 12px;
+}
+
+.dns-chain-node.accent,
+.dns-chain-node.active {
+  border-color: var(--accent);
+}
+
+.dns-chain-node.inactive {
+  color: var(--muted);
+  opacity: 0.65;
+  text-decoration: line-through;
+}
+
+.dns-chain-arrow,
+.dns-lock-note {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.dns-switches {
+  align-items: center;
+}
+
+.dns-function-settings > summary,
+.dns-advanced > summary {
+  cursor: pointer;
+  font-weight: 800;
+  list-style-position: inside;
+}
+
+.dns-function-body {
+  margin-top: 18px;
+}
+
+.dns-subsection + .dns-subsection {
+  border-top: 1px solid var(--border);
+  margin-top: 24px;
+  padding-top: 24px;
+}
+
+.dns-subsection > textarea {
+  min-height: 140px;
+  width: 100%;
+}
+
+.dns-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  justify-content: space-between;
+}
+
+.dns-actions .command-block {
+  flex-basis: 100%;
+}
+
 .internal-dns-grid .blocklist-domains {
   grid-column: 1 / -1;
 }

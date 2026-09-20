@@ -132,14 +132,15 @@ routing:
     routes: []
     domains: []
 
-# Internal DNS: when enabled, the VPN server itself becomes the DNS server
-# for clients (via the project-owned dnsmasq instance listening on
-# routing.split.dnsmasq_listen) and blocks the domains below, Pi-hole style.
-# Upstream resolvers are taken from server.dns.
+# Internal DNS features use the project-owned dnsmasq instance listening on
+# routing.split.dnsmasq_listen. Any enabled feature makes dnsmasq active and
+# causes VPN clients to use it; upstream resolvers are taken from server.dns.
 internal_dns:
-  enabled: false
-  # Optional forwarding for selected public zones. Clients still use this
-  # internal DNS; the shared upstream list applies to every domain below.
+  resolver_enabled: false
+  blocklist_enabled: false
+  local_records_enabled: false
+  # Optional forwarding for selected domain zones. Clients still use this
+  # resolver; the shared upstream list applies to every domain below.
   public_upstreams: []
   public_domains: []
   # Example:
@@ -149,10 +150,15 @@ internal_dns:
   blocklist_domains: []
   # Local text files with blocked domains (hosts or plain-domain format).
   blocklist_files: []
-  # HTTP(S) URLs of public blocklists (e.g. StevenBlack hosts, HaGeZi).
+  # HTTP(S) URLs of blocklists (e.g. StevenBlack hosts, HaGeZi).
   # Downloads are validated and cached per URL; refresh with
   # `korctl internal-dns refresh --url <url>`.
   blocklist_urls: []
+  cache_size: 150
+  log_queries: false
+  # Entries use "hostname IP" format and are applied only when
+  # local_records_enabled is true.
+  local_records: []
 
 web:
   enabled: false

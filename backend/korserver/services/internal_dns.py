@@ -134,8 +134,30 @@ class InternalDnsService:
             }
             for url in settings.blocklist_urls
         ]
+        reasons = self.config.dnsmasq_active_reasons()
+        client_reasons = self.config.client_dns_reasons()
+        configured = {
+            "resolver_enabled": settings.resolver_enabled,
+            "blocklist_enabled": settings.blocklist_enabled,
+            "local_records_enabled": settings.local_records_enabled,
+        }
+        effective = {
+            "dnsmasq_active": bool(reasons),
+            "client_dns_uses_dnsmasq": bool(client_reasons),
+            "resolver_enabled": settings.resolver_enabled,
+            "blocklist_enabled": settings.blocklist_enabled and bool(reasons),
+            "local_records_enabled": settings.local_records_enabled and bool(reasons),
+        }
         return {
-            "enabled": settings.enabled,
+            "configured": configured,
+            "effective": effective,
+            "effective_reasons": reasons,
+            "client_dns_reasons": client_reasons,
+            **configured,
+            "enabled": settings.resolver_enabled,
+            "server_dns": list(self.config.server.dns),
+            "search_domains": list(self.config.server.search_domains),
+            "tunnel_dns": self.config.routing.split.tunnel_dns,
             "listen": self.config.routing.split.dnsmasq_listen,
             "port": self.config.routing.split.dnsmasq_port,
             "client_dns": self.config.client_dns_servers(),

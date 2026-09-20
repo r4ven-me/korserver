@@ -66,7 +66,7 @@ def test_merged_blocklist_combines_three_sources(tmp_path: Path) -> None:
         tmp_path,
         {
             "internal_dns": {
-                "enabled": True,
+                "resolver_enabled": True,
                 "blocklist_domains": ["ads.example.com"],
                 "blocklist_files": [str(blocklist_file)],
                 "blocklist_urls": [url],
@@ -94,7 +94,7 @@ def test_merged_blocklist_combines_multiple_files_and_urls(tmp_path: Path) -> No
         tmp_path,
         {
             "internal_dns": {
-                "enabled": True,
+                "resolver_enabled": True,
                 "blocklist_files": [str(file_a), str(file_b)],
                 "blocklist_urls": [url_a, url_b],
             }
@@ -117,7 +117,7 @@ def test_merged_blocklist_combines_multiple_files_and_urls(tmp_path: Path) -> No
 
 
 def test_url_cache_ignored_when_url_not_configured(tmp_path: Path) -> None:
-    config = _config(tmp_path, {"internal_dns": {"enabled": True}})
+    config = _config(tmp_path, {"internal_dns": {"resolver_enabled": True}})
     service = InternalDnsService(config)
     cache_path = service.blocklist_cache_path("https://stale.example.com/hosts.txt")
     cache_path.parent.mkdir(parents=True, exist_ok=True)
@@ -134,7 +134,7 @@ def test_refresh_url_blocklist_validates_and_caches(
         tmp_path,
         {
             "internal_dns": {
-                "enabled": True,
+                "resolver_enabled": True,
                 "blocklist_urls": [url],
             }
         },
@@ -161,7 +161,7 @@ def test_refresh_url_blocklist_validates_and_caches(
 
 
 def test_refresh_url_blocklist_rejects_url_not_in_configured_list(tmp_path: Path) -> None:
-    config = _config(tmp_path, {"internal_dns": {"enabled": True}})
+    config = _config(tmp_path, {"internal_dns": {"resolver_enabled": True}})
     with pytest.raises(ValueError, match="does not contain"):
         InternalDnsService(config).refresh_url_blocklist("https://unsaved.example.com/x")
 
@@ -174,7 +174,7 @@ def test_refresh_url_blocklist_rejects_empty_result(
         tmp_path,
         {
             "internal_dns": {
-                "enabled": True,
+                "resolver_enabled": True,
                 "blocklist_urls": [url],
             }
         },
@@ -217,13 +217,13 @@ def test_internal_dns_requires_listen_inside_vpn_subnet(tmp_path: Path) -> None:
             tmp_path,
             {
                 "server": {"ipv4_network": "10.99.0.0/24"},
-                "internal_dns": {"enabled": True},
+                "internal_dns": {"resolver_enabled": True},
             },
         )
 
 
 def test_client_dns_becomes_vpn_server_when_internal_dns_enabled(tmp_path: Path) -> None:
-    config = _config(tmp_path, {"internal_dns": {"enabled": True}})
+    config = _config(tmp_path, {"internal_dns": {"resolver_enabled": True}})
     assert config.dns_tunnel_active()
     assert config.client_dns_servers() == ["10.10.10.1"]
 
@@ -264,7 +264,7 @@ def test_dns_tunnel_active_when_a_named_upstream_target_has_domains(tmp_path: Pa
 
 
 def test_dnsmasq_render_includes_blocklist_and_upstreams(tmp_path: Path) -> None:
-    config = _config(tmp_path, {"internal_dns": {"enabled": True}})
+    config = _config(tmp_path, {"internal_dns": {"blocklist_enabled": True}})
     rendered = DnsmasqConfigRenderer().render(config)
     assert "server=1.1.1.1" in rendered
     assert "server=8.8.8.8" in rendered
@@ -279,7 +279,7 @@ def test_rendered_files_include_dnsmasq_and_blocklist(tmp_path: Path) -> None:
         tmp_path,
         {
             "internal_dns": {
-                "enabled": True,
+                "blocklist_enabled": True,
                 "blocklist_domains": ["ads.example.com", "tracker.example.net"],
             }
         },
@@ -296,25 +296,26 @@ def test_rendered_files_include_dnsmasq_and_blocklist(tmp_path: Path) -> None:
 
     supervisor = SupervisorConfigRenderer().render(config)
     assert "[program:dnsmasq]" in supervisor
+    assert "autostart=true" in supervisor
     # dnsmasq must start through korctl so the listen IP is assigned to lo first
     assert "command=/usr/local/bin/korctl internal-dns run" in supervisor
 
 
 def test_ensure_listen_address_assigns_ip_to_loopback(tmp_path: Path) -> None:
-    config = _config(tmp_path, {"internal_dns": {"enabled": True}})
+    config = _config(tmp_path, {"internal_dns": {"resolver_enabled": True}})
     result = InternalDnsService(config).ensure_listen_address(dry_run=True)
     assert result.argv == ("ip", "addr", "replace", "10.10.10.1/32", "dev", "lo")
     assert result.dry_run
 
 
 def test_remove_listen_address_command(tmp_path: Path) -> None:
-    config = _config(tmp_path, {"internal_dns": {"enabled": True}})
+    config = _config(tmp_path, {"internal_dns": {"resolver_enabled": True}})
     result = InternalDnsService(config).remove_listen_address(dry_run=True)
     assert result.argv == ("ip", "addr", "del", "10.10.10.1/32", "dev", "lo")
 
 
 def test_dnsmasq_argv_uses_generated_conf(tmp_path: Path) -> None:
-    config = _config(tmp_path, {"internal_dns": {"enabled": True}})
+    config = _config(tmp_path, {"internal_dns": {"resolver_enabled": True}})
     argv = InternalDnsService(config).dnsmasq_argv()
     assert argv[0] == "/usr/sbin/dnsmasq"
     assert argv[1] == f"--conf-file={config.generated_path('dnsmasq.conf')}"
@@ -326,4 +327,68 @@ def test_dnsmasq_not_rendered_when_disabled(tmp_path: Path) -> None:
     rendered_paths = [str(item.path) for item in ConfigService().render_files(config)]
     assert str(config.generated_path("dnsmasq.conf")) not in rendered_paths
     supervisor = SupervisorConfigRenderer().render(config)
-    assert "[program:dnsmasq]" not in supervisor
+    assert "[program:dnsmasq]" in supervisor
+    assert "autostart=false" in supervisor
+
+
+def test_internal_dns_enabled_field_is_not_backward_compatible(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="enabled"):
+        _config(tmp_path, {"internal_dns": {"enabled": True}})
+
+
+def test_each_internal_dns_feature_activates_dnsmasq_and_client_dns(tmp_path: Path) -> None:
+    for flag in ("resolver_enabled", "blocklist_enabled", "local_records_enabled"):
+        config = _config(tmp_path, {"internal_dns": {flag: True}})
+
+        assert config.dnsmasq_active_reasons() == [flag]
+        assert config.client_dns_reasons() == [flag]
+        assert config.client_dns_servers() == ["10.10.10.1"]
+
+
+def test_host_profile_domains_activate_dnsmasq_without_changing_client_dns(
+    tmp_path: Path,
+) -> None:
+    config = _config(
+        tmp_path,
+        {
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    {
+                        "name": "host-only",
+                        "server": "vpn.example.com",
+                        "auth_type": "password",
+                        "username": "user",
+                        "route_clients_enabled": False,
+                        "route_host_enabled": True,
+                        "host_domains": ["host.corp"],
+                    }
+                ],
+            }
+        },
+    )
+
+    assert config.dnsmasq_active_reasons() == ["profile_host_domains"]
+    assert config.client_dns_reasons() == []
+    assert config.client_dns_servers() == ["1.1.1.1", "8.8.8.8"]
+    rendered_paths = [str(item.path) for item in ConfigService().render_files(config)]
+    assert str(config.generated_path("dnsmasq.conf")) in rendered_paths
+
+
+def test_blocklist_and_local_records_require_their_own_flags(tmp_path: Path) -> None:
+    config = _config(
+        tmp_path,
+        {
+            "internal_dns": {
+                "resolver_enabled": True,
+                "blocklist_domains": ["ads.example.com"],
+                "local_records": ["nas.corp.local 10.11.11.5"],
+            }
+        },
+    )
+
+    rendered = DnsmasqConfigRenderer().render(config)
+    assert "dnsmasq-blocklist.conf" not in rendered
+    assert "address=/nas.corp.local/10.11.11.5" not in rendered
+    rendered_paths = [str(item.path) for item in ConfigService().render_files(config)]
+    assert str(InternalDnsService(config).blocklist_conf_path()) not in rendered_paths

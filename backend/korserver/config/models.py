@@ -742,7 +742,9 @@ class RoutingConfig(StrictModel):
 
 
 class InternalDnsConfig(StrictModel):
-    enabled: bool = False
+    resolver_enabled: bool = False
+    blocklist_enabled: bool = False
+    local_records_enabled: bool = False
     blocklist_domains: list[str] = Field(default_factory=list)
     blocklist_files: list[Path] = Field(default_factory=list)
     blocklist_urls: list[str] = Field(default_factory=list)
@@ -1002,24 +1004,63 @@ class AppConfig(StrictModel):
                 )
         return self
 
+    def dnsmasq_active_reasons(self) -> list[str]:
+        """Return the configured features that require project-owned dnsmasq."""
+        reasons: list[str] = []
+        settings = self.internal_dns
+        if settings.resolver_enabled:
+            reasons.append("resolver_enabled")
+        if settings.blocklist_enabled:
+            reasons.append("blocklist_enabled")
+        if settings.local_records_enabled:
+            reasons.append("local_records_enabled")
+        if (
+            self.routing.client_traffic
+            and self.routing.mode == "split"
+            and self.routing.split.tunnel_dns
+        ):
+            reasons.append("split_dns")
+        if self.upstream.enabled and any(
+            profile.enabled and profile.route_clients_enabled and profile.domains
+            for profile in self.upstream.profiles
+        ):
+            reasons.append("profile_domains")
+        if (
+            self.routing.host_traffic
+            and self.routing.host_mode == "split"
+            and (
+                self.routing.host_split.domains
+                or self.routing.host_split.domains_files
+                or self.routing.host_split.domains_urls
+                or self.routing.host_split.domains_file.exists()
+            )
+        ):
+            reasons.append("host_split_domains")
+        if self.upstream.enabled and any(
+            profile.enabled and profile.route_host_enabled and profile.host_domains
+            for profile in self.upstream.profiles
+        ):
+            reasons.append("profile_host_domains")
+        return reasons
+
+    def client_dns_reasons(self) -> list[str]:
+        """Return active reasons for which VPN clients must query dnsmasq."""
+        client_relevant = {
+            "resolver_enabled",
+            "blocklist_enabled",
+            "local_records_enabled",
+            "split_dns",
+            "profile_domains",
+        }
+        return [reason for reason in self.dnsmasq_active_reasons() if reason in client_relevant]
+
     def dns_tunnel_active(self) -> bool:
-        """The project-owned dnsmasq instance must run: Internal DNS, split
-        DNS, or any named upstream target has its own domains -- those need
-        dnsmasq running to resolve them into their own nftables set,
-        otherwise a client's query for that domain never gets marked and its
-        traffic never reaches the profile it was assigned to."""
-        named_target_domains = self.upstream.enabled and any(
-            profile.domains for profile in self.upstream.profiles
-        )
-        return (
-            self.internal_dns.enabled
-            or (self.routing.mode == "split" and self.routing.split.tunnel_dns)
-            or named_target_domains
-        )
+        """Whether the project-owned dnsmasq instance must run."""
+        return bool(self.dnsmasq_active_reasons())
 
     def client_dns_servers(self) -> list[str]:
         """DNS servers pushed to VPN clients by ocserv."""
-        if self.dns_tunnel_active():
+        if self.client_dns_reasons():
             return [self.routing.split.dnsmasq_listen]
         return self.server.dns
 

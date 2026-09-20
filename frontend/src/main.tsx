@@ -57,6 +57,7 @@ import { createRoot } from "react-dom/client";
 import {
   applyNft,
   changePassword,
+  applyInternalDns,
   confirmTotp,
   connectUpstreamProfile,
   createCertificate,
@@ -234,7 +235,7 @@ const configSections: Array<{ id: ConfigSection; label: string }> = [
   { id: "auth", label: "Authentication" },
   { id: "identity", label: "Identity" },
   { id: "upstream", label: "Upstream" },
-  { id: "internal_dns", label: "Internal DNS" },
+  { id: "internal_dns", label: "DNS" },
   { id: "web", label: "Web / API" },
   { id: "advanced", label: "Advanced" }
 ];
@@ -564,6 +565,8 @@ function App() {
   });
   const [internalDnsDraft, setInternalDnsDraft] = useState<InternalDnsDraft>({
     enabled: false,
+    blocklistEnabled: false,
+    localRecordsEnabled: false,
     publicUpstreamsText: "",
     publicDomainsText: "",
     domainsText: "",
@@ -885,6 +888,13 @@ function App() {
         if (internalDns.status === "fulfilled") {
           setInternalDnsDraft({
             enabled: internalDns.value.enabled,
+            blocklistEnabled:
+              internalDns.value.blocklist_enabled ??
+              (internalDns.value.blocklist_domains.length > 0 ||
+                internalDns.value.blocklist_files.length > 0 ||
+                internalDns.value.blocklist_urls.length > 0),
+            localRecordsEnabled:
+              internalDns.value.local_records_enabled ?? internalDns.value.local_records.length > 0,
             publicUpstreamsText: internalDns.value.public_upstreams.join("\n"),
             publicDomainsText: internalDns.value.public_domains.join("\n"),
             domainsText: internalDns.value.blocklist_domains.join("\n"),
@@ -1458,10 +1468,17 @@ function App() {
   const handleSaveInternalDnsSettings = async () => {
     const result = await runAction(
       "internal-dns-settings",
-      "Internal DNS settings saved",
+      "DNS settings saved",
       (token) =>
         saveInternalDnsSettings(token, {
           enabled: internalDnsDraft.enabled,
+          blocklist_enabled: internalDnsDraft.blocklistEnabled,
+          local_records_enabled: internalDnsDraft.localRecordsEnabled,
+          server_dns: splitLines(serverSettingsDraft.dns),
+          search_domains: splitLines(serverSettingsDraft.searchDomains),
+          tunnel_dns: routingDraft.tunnelDns,
+          dnsmasq_listen: routingDraft.dnsmasqListen,
+          dnsmasq_port: routingDraft.dnsmasqPort,
           public_upstreams: splitLines(internalDnsDraft.publicUpstreamsText),
           public_domains: splitLines(internalDnsDraft.publicDomainsText),
           blocklist_domains: splitLines(internalDnsDraft.domainsText),
@@ -1473,11 +1490,17 @@ function App() {
         })
     );
     if (result !== null) {
-      recordCommand(
-        "internal_dns",
-        syntheticCommand(["korctl", "internal-dns", "settings"], "saved")
-      );
+      recordCommand("internal_dns", syntheticCommand(["korctl", "dns", "settings"], "saved"));
     }
+  };
+
+  const handleApplyInternalDns = async () => {
+    const result = await runAction(
+      "internal-dns-apply",
+      "DNS changes applied",
+      (token) => applyInternalDns(token)
+    );
+    if (result !== null) recordCommand("internal_dns", result);
   };
 
   const handleRefreshInternalDnsBlocklist = async (url: string, preview: boolean) => {
@@ -2357,13 +2380,21 @@ function App() {
             status={state.internalDns}
             draft={internalDnsDraft}
             dnsServerDraft={routingDraft}
+            serverDraft={serverSettingsDraft}
+            resolverRequired={
+              (routingDraft.mode === "split" && routingDraft.tunnelDns) ||
+              state.upstreamProfiles.some(
+                (profile) => profile.enabled && (profile.domains?.length ?? 0) > 0
+              )
+            }
             busy={busy}
             commandOutput={commandOutputs.internal_dns ?? null}
             onClearCommand={() => clearCommand("internal_dns")}
             onDraftChange={setInternalDnsDraft}
             onDnsServerDraftChange={setRoutingDraft}
+            onServerDraftChange={setServerSettingsDraft}
             onSave={() => void handleSaveInternalDnsSettings()}
-            onSaveDnsServer={() => void handleSaveRoutingSettings()}
+            onApply={() => void handleApplyInternalDns()}
             onPreviewUrl={(url) => void handleRefreshInternalDnsBlocklist(url, true)}
             onRefreshUrl={(url) => void handleRefreshInternalDnsBlocklist(url, false)}
           />
@@ -4636,6 +4667,8 @@ function RoutingListSourcesPanel({
 
 type InternalDnsDraft = {
   enabled: boolean;
+  blocklistEnabled: boolean;
+  localRecordsEnabled: boolean;
   publicUpstreamsText: string;
   publicDomainsText: string;
   domainsText: string;
@@ -4650,293 +4683,192 @@ function InternalDnsView({
   status,
   draft,
   dnsServerDraft,
+  serverDraft,
+  resolverRequired,
   busy,
   commandOutput,
   onClearCommand,
   onDraftChange,
   onDnsServerDraftChange,
+  onServerDraftChange,
   onSave,
-  onSaveDnsServer,
+  onApply,
   onPreviewUrl,
   onRefreshUrl
 }: {
   status: InternalDnsStatus | null;
   draft: InternalDnsDraft;
   dnsServerDraft: RoutingDraft;
+  serverDraft: ServerSettingsDraft;
+  resolverRequired: boolean;
   busy: string | null;
   commandOutput: CommandResult | CommandResult[] | null;
   onClearCommand: () => void;
   onDraftChange: (value: InternalDnsDraft) => void;
   onDnsServerDraftChange: (value: RoutingDraft) => void;
+  onServerDraftChange: (value: ServerSettingsDraft) => void;
   onSave: () => void;
-  onSaveDnsServer: () => void;
+  onApply: () => void;
   onPreviewUrl: (url: string) => void;
   onRefreshUrl: (url: string) => void;
 }) {
-  // The dnsmasq listen address/port matter whenever this server's own
-  // dnsmasq actually runs -- Internal DNS OR split-mode domain resolution
-  // (see AppConfig.dns_tunnel_active on the backend), not Internal DNS alone.
-  const dnsmasqActive =
-    draft.enabled || (dnsServerDraft.mode === "split" && dnsServerDraft.tunnelDns);
+  const resolverActive = draft.enabled || resolverRequired;
   return (
-    <div className="view-stack">
+    <div className="view-stack dns-view">
       <section className="panel">
         <div className="panel-header">
-          <h2>Internal DNS</h2>
+          <div>
+            <h2>DNS</h2>
+            <p className="muted-line">One draft controls the DNS path used by VPN clients.</p>
+          </div>
+          <Pill kind={resolverActive ? "ok" : "muted"}>
+            {resolverActive ? "Built-in resolver" : "Direct server DNS"}
+          </Pill>
         </div>
-        <p className="muted-line">
-          When Internal DNS is enabled, the VPN server itself becomes the DNS server for all
-          clients: ocserv pushes{" "}
-          {status ? `${status.listen}:${status.port}` : "the dnsmasq listen address"} instead of
-          the upstream DNS list, and the built-in dnsmasq forwards queries to the DNS servers
-          configured in Config → Server while blocking the domains listed below (Pi-hole style).
-        </p>
-        <div className="settings-grid">
-          <label className="switch" title="Run the built-in DNS server and push it to clients">
+
+        <div className="dns-chain" aria-label="DNS request path">
+          <div className="dns-chain-node">VPN client</div>
+          <span className="dns-chain-arrow">→</span>
+          {!resolverActive ? (
+            <div className="dns-chain-node">Direct server DNS</div>
+          ) : (
+            <>
+              <div className="dns-chain-node accent">Built-in resolver</div>
+              <span className="dns-chain-arrow">→</span>
+              <div className={`dns-chain-node ${draft.localRecordsEnabled ? "active" : "inactive"}`}>
+                Local records
+              </div>
+              <span className="dns-chain-arrow">→</span>
+              <div className={`dns-chain-node ${draft.blocklistEnabled ? "active" : "inactive"}`}>
+                Blocklist
+              </div>
+              <span className="dns-chain-arrow">→</span>
+              <div className="dns-chain-node">Upstream DNS rules / default upstream</div>
+            </>
+          )}
+        </div>
+
+        <div className="settings-grid dns-switches">
+          <label className="switch" title={resolverRequired ? "Required by split or profile domains" : undefined}>
             <input
-              checked={draft.enabled}
+              checked={resolverActive}
+              disabled={resolverRequired}
               onChange={(event) => onDraftChange({ ...draft, enabled: event.target.checked })}
               type="checkbox"
             />
-            <span>Enable Internal DNS</span>
+            <span>Use built-in resolver</span>
           </label>
-          {status && (
-            <label>
-              <span>DNS pushed to clients</span>
-              <input readOnly value={status.client_dns.join(", ")} />
-            </label>
+          {resolverRequired && (
+            <p className="dns-lock-note">Locked on: split/profile domains require the built-in resolver.</p>
           )}
-          <label title="Number of DNS answers dnsmasq keeps cached (dnsmasq --cache-size)">
-            <span>Cache size</span>
+          <label className="switch">
             <input
-              type="number"
-              min={0}
-              max={10000}
-              value={draft.cacheSize}
+              checked={draft.localRecordsEnabled}
+              disabled={!resolverActive}
               onChange={(event) =>
-                onDraftChange({
-                  ...draft,
-                  cacheSize: Math.max(0, Number(event.target.value) || 0)
-                })
+                onDraftChange({ ...draft, localRecordsEnabled: event.target.checked })
               }
-            />
-          </label>
-          <label
-            className="switch"
-            title="Log every DNS query dnsmasq handles, to dnsmasq.log (Logs tab) -- useful for troubleshooting, noisy in normal operation"
-          >
-            <input
-              checked={draft.logQueries}
-              onChange={(event) => onDraftChange({ ...draft, logQueries: event.target.checked })}
               type="checkbox"
             />
-            <span>Log queries</span>
+            <span>Enable local records</span>
           </label>
-        </div>
-        <div className="panel-footer">
-          <ActionButton
-            label="Save"
-            icon={Save}
-            primary
-            busy={busy === "internal-dns-settings"}
-            onClick={onSave}
-          />
+          <label className="switch">
+            <input
+              checked={draft.blocklistEnabled}
+              disabled={!resolverActive}
+              onChange={(event) =>
+                onDraftChange({ ...draft, blocklistEnabled: event.target.checked })
+              }
+              type="checkbox"
+            />
+            <span>Enable blocklist</span>
+          </label>
         </div>
       </section>
+
       <section className="panel">
-        <div className="panel-header">
-          <h2>DNS server</h2>
-        </div>
-        <p className="muted-line">
-          Where this server's built-in dnsmasq actually listens -- must be an address inside the
-          VPN client subnet (Config → Server) so clients can reach it. Shared by Internal DNS and
-          by Upstream's split-mode "Domain split (DNS)" routing; either one keeps it active.
-        </p>
-        <div className="settings-grid">
-          <label>
-            <span>dnsmasq listen</span>
-            <input
-              disabled={!dnsmasqActive}
-              value={dnsServerDraft.dnsmasqListen}
-              onChange={(event) =>
-                onDnsServerDraftChange({ ...dnsServerDraft, dnsmasqListen: event.target.value })
-              }
-            />
-          </label>
-          <label>
-            <span>dnsmasq port</span>
-            <input
-              disabled={!dnsmasqActive}
-              min={1}
-              max={65535}
-              type="number"
-              value={dnsServerDraft.dnsmasqPort}
-              onChange={(event) =>
-                onDnsServerDraftChange({
-                  ...dnsServerDraft,
-                  dnsmasqPort: Math.max(1, Number(event.target.value) || 53)
-                })
-              }
-            />
-          </label>
-        </div>
-        <div className="panel-footer">
-          <ActionButton
-            label="Save"
-            icon={Save}
-            primary
-            busy={busy === "routing-settings"}
-            onClick={onSaveDnsServer}
-          />
-        </div>
-      </section>
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Local DNS records</h2>
-        </div>
-        <p className="muted-line">
-          Static hostname → IP overrides answered directly by this server's dnsmasq -- handy for
-          naming internal resources reachable through Upstream/split routing without running a
-          full DNS zone. One per line: <code>hostname ip</code>.
-        </p>
+        <div className="panel-header"><h2>Default upstream</h2></div>
+        <p className="muted-line">Same as Server. Used directly when the resolver is off and as the resolver default otherwise.</p>
         <div className="settings-grid internal-dns-grid">
           <label className="blocklist-domains">
-            <span>Records</span>
+            <span>DNS servers (same as Server)</span>
             <textarea
+              aria-label="DNS servers (same as Server)"
+              rows={3}
+              value={serverDraft.dns}
+              onChange={(event) => onServerDraftChange({ ...serverDraft, dns: event.target.value })}
+            />
+          </label>
+          <label className="blocklist-domains">
+            <span>Search domains (same as Server)</span>
+            <textarea
+              rows={3}
+              value={serverDraft.searchDomains}
+              onChange={(event) =>
+                onServerDraftChange({ ...serverDraft, searchDomains: event.target.value })
+              }
+            />
+          </label>
+        </div>
+      </section>
+
+      <details className="panel dns-function-settings" open={resolverActive || undefined}>
+        <summary>Resolver functions</summary>
+        <div className="dns-function-body">
+          <section className="dns-subsection">
+            <div className="panel-header"><h2>Local records</h2></div>
+            <textarea
+              aria-label="Local records"
+              disabled={!resolverActive || !draft.localRecordsEnabled}
               rows={6}
               placeholder={"nas.corp.local 10.11.11.5\nprinter.corp.local 10.11.11.6"}
               value={draft.localRecordsText}
-              onChange={(event) =>
-                onDraftChange({ ...draft, localRecordsText: event.target.value })
-              }
+              onChange={(event) => onDraftChange({ ...draft, localRecordsText: event.target.value })}
             />
-          </label>
+          </section>
+
+          <section className="dns-subsection">
+            <div className="panel-header"><h2>Blocklist</h2>{status && <Pill kind="muted">{status.total} domains</Pill>}</div>
+            <div className="settings-grid internal-dns-grid">
+              <label className="blocklist-domains"><span>Blocked domains</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={5} value={draft.domainsText} onChange={(event) => onDraftChange({ ...draft, domainsText: event.target.value })} /></label>
+              <label className="blocklist-domains"><span>Blocklist files</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={3} value={draft.filesText} onChange={(event) => onDraftChange({ ...draft, filesText: event.target.value })} /></label>
+              <label className="blocklist-domains"><span>Blocklist URLs</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={3} value={draft.urlsText} onChange={(event) => onDraftChange({ ...draft, urlsText: event.target.value })} /></label>
+            </div>
+            {status && status.blocklist_urls.length > 0 && (
+              <ul className="blocklist-url-status">{status.blocklist_urls.map((entry) => (
+                <li key={entry.url} className="blocklist-url-entry"><code>{entry.url}</code><div className="toolbar blocklist-url-actions"><ActionButton label="Validate URL" icon={Eye} busy={busy === `internal-dns-preview-${entry.url}`} onClick={() => onPreviewUrl(entry.url)} /><ActionButton label="Download & apply" icon={Download} busy={busy === `internal-dns-refresh-${entry.url}`} onClick={() => onRefreshUrl(entry.url)} /></div></li>
+              ))}</ul>
+            )}
+          </section>
+
+          <section className="dns-subsection">
+            <div className="panel-header"><h2>Upstream DNS rules</h2></div>
+            <div className="settings-grid internal-dns-grid">
+              <label className="blocklist-domains"><span>Upstream DNS servers</span><textarea rows={4} value={draft.publicUpstreamsText} onChange={(event) => onDraftChange({ ...draft, publicUpstreamsText: event.target.value })} /></label>
+              <label className="blocklist-domains"><span>Domains</span><textarea rows={4} value={draft.publicDomainsText} onChange={(event) => onDraftChange({ ...draft, publicDomainsText: event.target.value })} /></label>
+            </div>
+          </section>
         </div>
-      </section>
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Public DNS forwarding</h2>
+      </details>
+
+      <details className="panel dns-advanced" open={resolverActive || undefined}>
+        <summary>Advanced resolver settings</summary>
+        <div className="settings-grid dns-function-body">
+          <label className="switch"><input checked={dnsServerDraft.tunnelDns} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, tunnelDns: event.target.checked })} type="checkbox" /><span>Split DNS (same as Upstream)</span></label>
+          <label><span>Resolver listen address (same as Upstream)</span><input disabled={!resolverActive} value={dnsServerDraft.dnsmasqListen} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, dnsmasqListen: event.target.value })} /></label>
+          <label><span>Resolver port (same as Upstream)</span><input disabled={!resolverActive} min={1} max={65535} type="number" value={dnsServerDraft.dnsmasqPort} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, dnsmasqPort: Math.max(1, Number(event.target.value) || 53) })} /></label>
+          <label><span>Cache size</span><input disabled={!resolverActive} type="number" min={0} max={10000} value={draft.cacheSize} onChange={(event) => onDraftChange({ ...draft, cacheSize: Math.max(0, Number(event.target.value) || 0) })} /></label>
+          <label className="switch"><input checked={draft.logQueries} disabled={!resolverActive} onChange={(event) => onDraftChange({ ...draft, logQueries: event.target.checked })} type="checkbox" /><span>Log queries</span></label>
         </div>
-        <p className="muted-line">
-          Send queries for the listed domains to these public DNS servers instead of the default
-          upstream resolvers.
-        </p>
-        <div className="settings-grid internal-dns-grid">
-          <label className="blocklist-domains">
-            <span>Public DNS upstreams (one IP per line)</span>
-            <textarea
-              rows={4}
-              placeholder={"1.1.1.1\n8.8.8.8"}
-              value={draft.publicUpstreamsText}
-              onChange={(event) =>
-                onDraftChange({ ...draft, publicUpstreamsText: event.target.value })
-              }
-            />
-          </label>
-          <label className="blocklist-domains">
-            <span>Public domains (one per line)</span>
-            <textarea
-              rows={4}
-              placeholder={"example.com\nexample.net"}
-              value={draft.publicDomainsText}
-              onChange={(event) =>
-                onDraftChange({ ...draft, publicDomainsText: event.target.value })
-              }
-            />
-          </label>
+      </details>
+
+      <section className="panel dns-actions">
+        <div><strong>Save stores the draft only.</strong><p className="muted-line">Apply is separate because active VPN clients will be disconnected.</p></div>
+        <div className="toolbar">
+          <ActionButton label="Save" icon={Save} primary busy={busy === "internal-dns-settings"} onClick={onSave} />
+          <ActionButton label="Apply DNS changes (disconnects active clients)" icon={RefreshCw} danger busy={busy === "internal-dns-apply"} onClick={onApply} />
         </div>
-      </section>
-      <section className="panel">
-        <div className="panel-header">
-          <h2>Blocklist</h2>
-          {status && <Pill kind="muted">{status.total} domains blocked in total</Pill>}
-        </div>
-        <div className="settings-grid internal-dns-grid">
-          <label className="blocklist-domains">
-            <span>Blocked domains (one per line)</span>
-            <textarea
-              rows={8}
-              placeholder={"ads.example.com\ntracker.example.net"}
-              value={draft.domainsText}
-              onChange={(event) => onDraftChange({ ...draft, domainsText: event.target.value })}
-            />
-          </label>
-          <label className="blocklist-domains">
-            <span>Blocklist files (one path per line)</span>
-            <textarea
-              rows={4}
-              placeholder={"/var/lib/korserver/blocklist.txt\n/var/lib/korserver/blocklist2.txt"}
-              value={draft.filesText}
-              onChange={(event) => onDraftChange({ ...draft, filesText: event.target.value })}
-            />
-          </label>
-          <label className="blocklist-domains">
-            <span>Blocklist URLs (one per line)</span>
-            <textarea
-              rows={4}
-              placeholder={
-                "https://raw.githubusercontent.com/StevenBlack/hosts/master/hosts\n" +
-                "https://raw.githubusercontent.com/hagezi/dns-blocklists/main/wildcard/multi-onlydomains.txt"
-              }
-              value={draft.urlsText}
-              onChange={(event) => onDraftChange({ ...draft, urlsText: event.target.value })}
-            />
-          </label>
-        </div>
-        <p className="muted-line">
-          Save the settings first, then validate a saved URL below to preview the downloaded list
-          before applying it. Hosts files, plain domain lists and AdBlock-style entries are
-          accepted; anything else is skipped. Downloads are size-limited and parsed safely.
-        </p>
-        {status && status.blocklist_files.length > 0 && (
-          <ul className="blocklist-file-status">
-            {status.blocklist_files.map((file) => (
-              <li key={file.path}>
-                <code>{file.path}</code>
-                <span className="muted-line">
-                  {file.exists ? ` — ${file.count} domains` : " — file not found"}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-        {status && status.blocklist_urls.length > 0 && (
-          <ul className="blocklist-url-status">
-            {status.blocklist_urls.map((entry) => {
-              const lastRefresh = entry.meta?.fetched_at
-                ? new Date(entry.meta.fetched_at * 1000).toLocaleString()
-                : null;
-              return (
-                <li key={entry.url} className="blocklist-url-entry">
-                  <code>{entry.url}</code>
-                  <span className="muted-line">
-                    {entry.count} domains cached
-                    {lastRefresh ? ` — last download: ${lastRefresh}` : ""}
-                  </span>
-                  <div className="toolbar blocklist-url-actions">
-                    <ActionButton
-                      label="Validate URL"
-                      icon={Eye}
-                      busy={busy === `internal-dns-preview-${entry.url}`}
-                      onClick={() => onPreviewUrl(entry.url)}
-                    />
-                    <ActionButton
-                      label="Download & apply"
-                      icon={Download}
-                      busy={busy === `internal-dns-refresh-${entry.url}`}
-                      onClick={() => onRefreshUrl(entry.url)}
-                    />
-                  </div>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-        {commandOutput ? (
-          <CommandBlock result={commandOutput} onClose={onClearCommand} />
-        ) : (
-          <EmptyState text="No command output" />
-        )}
+        {commandOutput && <CommandBlock result={commandOutput} onClose={onClearCommand} />}
       </section>
     </div>
   );
@@ -5917,7 +5849,7 @@ function UpstreamSettingsDialog({
               <div className="routing-substep">
                 <label
                   className="switch"
-                  title="Push this server's dnsmasq as the DNS for VPN clients and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → Internal DNS."
+                  title="Push this server's dnsmasq as the DNS for VPN clients and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → DNS."
                 >
                   <input
                     checked={routingDraft.tunnelDns}

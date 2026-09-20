@@ -34,16 +34,16 @@ stdout_logfile_maxbytes=0
 redirect_stderr=true
 {% endif %}
 
-{% if config.dns_tunnel_active() %}
 [program:dnsmasq]
-; korctl assigns the dnsmasq listen IP to lo (ocserv never puts the VPN
-; gateway address on any interface), then execs dnsmasq in the foreground.
+; Always register the process so DNS can be enabled through the panel without
+; requiring supervisord itself to restart. It starts automatically only when
+; the saved configuration needs the project-owned resolver.
 command=/usr/local/bin/korctl internal-dns run
+autostart={{ "true" if config.dns_tunnel_active() else "false" }}
 autorestart=true
 stdout_logfile={{ config.system.log_dir }}/dnsmasq.log
 stdout_logfile_maxbytes=0
 redirect_stderr=true
-{% endif %}
 
 {% if config.web.enabled %}
 [program:api]

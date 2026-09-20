@@ -37,7 +37,13 @@ def test_internal_dns_status_defaults(tmp_path: Path) -> None:
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["enabled"] is False
+    assert payload["configured"] == {
+        "resolver_enabled": False,
+        "blocklist_enabled": False,
+        "local_records_enabled": False,
+    }
+    assert payload["effective"]["dnsmasq_active"] is False
+    assert payload["effective_reasons"] == []
     assert payload["client_dns"] == ["1.1.1.1", "8.8.8.8"]
     assert payload["total"] == 0
 
@@ -50,7 +56,12 @@ def test_internal_dns_settings_enable_switches_client_dns(tmp_path: Path) -> Non
         "/api/internal-dns/settings",
         auth=("admin", "secret"),
         json={
-            "enabled": True,
+            "server_dns": ["9.9.9.9"],
+            "resolver_enabled": True,
+            "listen": "10.10.10.2",
+            "port": 5353,
+            "blocklist_enabled": True,
+            "local_records_enabled": False,
             "blocklist_domains": ["Ads.Example.COM"],
             "blocklist_urls": ["https://lists.example.com/hosts.txt"],
         },
@@ -58,12 +69,21 @@ def test_internal_dns_settings_enable_switches_client_dns(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["internal_dns"]["enabled"] is True
-    assert payload["internal_dns"]["client_dns"] == ["10.10.10.1"]
+    assert payload["internal_dns"]["resolver_enabled"] is True
+    assert payload["internal_dns"]["blocklist_enabled"] is True
+    assert payload["internal_dns"]["effective_reasons"] == [
+        "resolver_enabled",
+        "blocklist_enabled",
+    ]
+    assert payload["internal_dns"]["client_dns"] == ["10.10.10.2"]
     assert payload["internal_dns"]["blocklist_domains"] == ["ads.example.com"]
 
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
-    assert saved["internal_dns"]["enabled"] is True
+    assert saved["server"]["dns"] == ["9.9.9.9"]
+    assert saved["routing"]["split"]["dnsmasq_listen"] == "10.10.10.2"
+    assert saved["routing"]["split"]["dnsmasq_port"] == 5353
+    assert saved["internal_dns"]["resolver_enabled"] is True
+    assert saved["internal_dns"]["blocklist_enabled"] is True
     assert saved["internal_dns"]["blocklist_urls"] == ["https://lists.example.com/hosts.txt"]
 
     generated_dnsmasq = tmp_path / "generated" / "dnsmasq.conf"
@@ -73,7 +93,7 @@ def test_internal_dns_settings_enable_switches_client_dns(tmp_path: Path) -> Non
     assert "address=/ads.example.com/0.0.0.0" in blocklist_conf.read_text(encoding="utf-8")
 
     ocserv_conf = (tmp_path / "generated" / "ocserv.conf").read_text(encoding="utf-8")
-    assert "dns = 10.10.10.1" in ocserv_conf
+    assert "dns = 10.10.10.2" in ocserv_conf
 
 
 def test_internal_dns_settings_saves_cache_size_log_queries_and_local_records(
@@ -86,7 +106,9 @@ def test_internal_dns_settings_saves_cache_size_log_queries_and_local_records(
         "/api/internal-dns/settings",
         auth=("admin", "secret"),
         json={
-            "enabled": False,
+            "resolver_enabled": False,
+            "blocklist_enabled": False,
+            "local_records_enabled": True,
             "cache_size": 1000,
             "log_queries": True,
             "local_records": ["nas.corp.local 10.11.11.5"],
@@ -111,7 +133,7 @@ def test_internal_dns_settings_rejects_bad_url(tmp_path: Path) -> None:
     response = client.post(
         "/api/internal-dns/settings",
         auth=("admin", "secret"),
-        json={"enabled": False, "blocklist_urls": ["ftp://lists.example.com/x"]},
+        json={"blocklist_enabled": False, "blocklist_urls": ["ftp://lists.example.com/x"]},
     )
 
     assert response.status_code == 400
@@ -124,7 +146,7 @@ def test_internal_dns_settings_rejects_invalid_domains(tmp_path: Path) -> None:
     response = client.post(
         "/api/internal-dns/settings",
         auth=("admin", "secret"),
-        json={"enabled": False, "blocklist_domains": ["not a domain"]},
+        json={"blocklist_enabled": False, "blocklist_domains": ["not a domain"]},
     )
 
     assert response.status_code == 400
@@ -140,7 +162,7 @@ def test_internal_dns_refresh_preview_and_apply(
         tmp_path,
         extra=f"""
 internal_dns:
-  enabled: true
+  blocklist_enabled: true
   blocklist_urls:
     - {url}
 """,
@@ -217,7 +239,7 @@ def test_internal_dns_status_lists_multiple_files_and_urls(tmp_path: Path) -> No
         "/api/internal-dns/settings",
         auth=("admin", "secret"),
         json={
-            "enabled": True,
+            "blocklist_enabled": True,
             "blocklist_files": [str(blocklist_file)],
             "blocklist_urls": [
                 "https://lists.example.com/a.txt",

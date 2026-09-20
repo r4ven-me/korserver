@@ -108,7 +108,9 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "internal_dns": {
-        "enabled": False,
+        "resolver_enabled": False,
+        "blocklist_enabled": False,
+        "local_records_enabled": False,
         "blocklist_domains": [],
         "blocklist_files": [],
         "blocklist_urls": [],

@@ -28,10 +28,14 @@ class DnsmasqConfigRenderer(TemplateRenderer):
         # dropped server — so keep only real upstreams.
         listen = config.routing.split.dnsmasq_listen
         upstream_dns = [dns for dns in config.server.dns if dns != listen]
-        local_records = [
-            {"host": host, "ip": ip}
-            for host, ip in (record.split() for record in config.internal_dns.local_records)
-        ]
+        local_records = (
+            [
+                {"host": host, "ip": ip}
+                for host, ip in (record.split() for record in config.internal_dns.local_records)
+            ]
+            if config.internal_dns.local_records_enabled
+            else []
+        )
         public_upstreams = config.internal_dns.public_upstreams
         public_domains = config.internal_dns.public_domains
         routing_service = RoutingService(config)

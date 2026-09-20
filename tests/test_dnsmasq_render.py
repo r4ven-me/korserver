@@ -164,7 +164,8 @@ def test_dnsmasq_render_includes_local_records(tmp_path: Path) -> None:
         tmp_path / "missing.yaml",
         cli_overrides={
             "internal_dns": {
-                "local_records": ["nas.corp.local 10.11.11.5", "printer 10.11.11.6"]
+                "local_records_enabled": True,
+                "local_records": ["nas.corp.local 10.11.11.5", "printer 10.11.11.6"],
             }
         },
         environ={},

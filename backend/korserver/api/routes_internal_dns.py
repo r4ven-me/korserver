@@ -1,26 +1,47 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
 from korserver.config.models import AppConfig
+from korserver.services.command import CommandResult
 from korserver.services.internal_dns import InternalDnsService
+from korserver.services.server import ServerService
+from korserver.services.sessions import SessionService
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
 
 class InternalDnsSettingsRequest(BaseModel):
-    enabled: bool = False
+    server_dns: list[str] = Field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])
+    search_domains: list[str] = Field(default_factory=list)
+    tunnel_dns: bool = False
+    enabled: bool = Field(
+        default=False,
+        validation_alias=AliasChoices("enabled", "resolver_enabled"),
+    )
+    dnsmasq_listen: str = Field(
+        default="10.10.10.1",
+        validation_alias=AliasChoices("dnsmasq_listen", "listen"),
+    )
+    dnsmasq_port: int = Field(
+        default=53,
+        ge=1,
+        le=65535,
+        validation_alias=AliasChoices("dnsmasq_port", "port"),
+    )
+    blocklist_enabled: bool = False
+    local_records_enabled: bool = False
     blocklist_domains: list[str] = Field(default_factory=list)
     blocklist_files: list[str] = Field(default_factory=list)
     blocklist_urls: list[str] = Field(default_factory=list)
-    cache_size: int = 150
+    cache_size: int = Field(default=150, ge=0, le=10000)
     log_queries: bool = False
     local_records: list[str] = Field(default_factory=list)
-    public_upstreams: list[str] | None = None
-    public_domains: list[str] | None = None
+    public_upstreams: list[str] = Field(default_factory=list)
+    public_domains: list[str] = Field(default_factory=list)
 
 
 class BlocklistRefreshRequest(BaseModel):
@@ -49,27 +70,71 @@ def save_internal_dns_settings(
     request: Request,
     payload: InternalDnsSettingsRequest,
 ) -> dict[str, object]:
-    settings: dict[str, object] = {
-        "enabled": payload.enabled,
-        "blocklist_domains": payload.blocklist_domains,
-        "blocklist_files": payload.blocklist_files,
-        "blocklist_urls": payload.blocklist_urls,
-        "cache_size": payload.cache_size,
-        "log_queries": payload.log_queries,
-        "local_records": payload.local_records,
+    patch: dict[str, object] = {
+        "server": {
+            "dns": payload.server_dns,
+            "search_domains": payload.search_domains,
+        },
+        "routing": {
+            "split": {
+                "tunnel_dns": payload.tunnel_dns,
+                "dnsmasq_listen": payload.dnsmasq_listen,
+                "dnsmasq_port": payload.dnsmasq_port,
+            }
+        },
+        "internal_dns": {
+            "resolver_enabled": payload.enabled,
+            "blocklist_enabled": payload.blocklist_enabled,
+            "local_records_enabled": payload.local_records_enabled,
+            "blocklist_domains": payload.blocklist_domains,
+            "blocklist_files": payload.blocklist_files,
+            "blocklist_urls": payload.blocklist_urls,
+            "cache_size": payload.cache_size,
+            "log_queries": payload.log_queries,
+            "local_records": payload.local_records,
+            "public_upstreams": payload.public_upstreams,
+            "public_domains": payload.public_domains,
+        },
     }
-    # Older frontend builds do not know these fields; when both are omitted,
-    # preserve existing forwarding rules rather than silently clearing them.
-    if payload.public_upstreams is not None or payload.public_domains is not None:
-        settings["public_upstreams"] = payload.public_upstreams or []
-        settings["public_domains"] = payload.public_domains or []
-    patch = {"internal_dns": settings}
     loaded_config, written = apply_config_patch(request, patch)
     return {
         "status": "saved",
         "written": written,
         "internal_dns": InternalDnsService(loaded_config).status(),
     }
+
+
+def _command_payload(result: CommandResult) -> dict[str, object]:
+    return {
+        "argv": list(result.argv),
+        "returncode": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "dry_run": result.dry_run,
+    }
+
+
+@router.post("/apply")
+def apply_internal_dns(request: Request) -> list[dict[str, object]]:
+    """Apply saved DNS configuration and reconnect clients to receive it."""
+    config: AppConfig = request.app.state.config
+    from korserver.services.config import ConfigService
+
+    ConfigService().write_rendered_files(config)
+    results = []
+    server = ServerService(config)
+    if config.dns_tunnel_active():
+        InternalDnsService(config).ensure_listen_address()
+        results.append(server.process_action("restart", "dnsmasq"))
+    else:
+        results.append(server.process_action("stop", "dnsmasq"))
+    reload_result = server.reload()
+    results.append(reload_result)
+    if reload_result.ok:
+        sessions = SessionService(config)
+        for username in dict.fromkeys(item.username for item in sessions.list_sessions()):
+            results.append(sessions.kick(username))
+    return [_command_payload(result) for result in results]
 
 
 @router.post("/blocklist/refresh")
@@ -85,7 +150,7 @@ def refresh_blocklist(
         )
     result = InternalDnsService(config).refresh_url_blocklist(payload.url, preview=payload.preview)
     written: list[str] = []
-    if result.saved and config.internal_dns.enabled:
+    if result.saved and config.internal_dns.blocklist_enabled:
         from korserver.services.config import ConfigService
 
         written = [str(path) for path in ConfigService().write_rendered_files(config)]

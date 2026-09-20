@@ -58,6 +58,6 @@ nftset=/{{ domain }}/4#inet#{{ filter_table }}#host_split_v4,6#inet#{{ filter_ta
 address=/{{ record.host }}/{{ record.ip }}
 {% endfor %}
 
-{% if config.internal_dns.enabled %}
+{% if config.internal_dns.blocklist_enabled %}
 conf-file={{ blocklist_conf }}
 {% endif %}

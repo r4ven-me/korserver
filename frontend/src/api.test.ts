@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
+  applyInternalDns,
   login,
   saveAuthMethodsSettings,
+  saveInternalDnsSettings,
   saveRoutingSettings,
   saveUpstreamProfile,
   setCsrfToken,
@@ -192,6 +194,59 @@ describe("saveUpstreamProfile", () => {
     const sent = JSON.parse(String(init.body));
     expect(sent.routes).toEqual([]);
     expect(sent.domains).toEqual([]);
+  });
+});
+
+describe("internal DNS settings API", () => {
+  it("saves the complete DNS draft atomically", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: "saved" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const payload = {
+      enabled: true,
+      blocklist_enabled: true,
+      local_records_enabled: true,
+      server_dns: ["9.9.9.9"],
+      search_domains: ["corp.example"],
+      tunnel_dns: true,
+      dnsmasq_listen: "10.10.10.1",
+      dnsmasq_port: 53,
+      public_upstreams: ["1.1.1.1"],
+      public_domains: ["example.com"],
+      blocklist_domains: ["ads.example"],
+      blocklist_files: [],
+      blocklist_urls: [],
+      cache_size: 150,
+      log_queries: false,
+      local_records: ["nas.corp.example 10.0.0.2"]
+    };
+
+    await saveInternalDnsSettings("session", payload);
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/internal-dns/settings");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(String(init.body))).toEqual(payload);
+  });
+
+  it("applies DNS changes through the dedicated action", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify([]), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await applyInternalDns("session");
+
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(path).toBe("/api/internal-dns/apply");
+    expect(init.method).toBe("POST");
   });
 });
 

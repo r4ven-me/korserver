@@ -52,7 +52,7 @@ class ConfigService:
                     self.dnsmasq_renderer.render(config),
                 )
             )
-        if config.internal_dns.enabled:
+        if config.internal_dns.blocklist_enabled:
             from korserver.services.internal_dns import InternalDnsService
 
             internal_dns = InternalDnsService(config, self.file_manager)

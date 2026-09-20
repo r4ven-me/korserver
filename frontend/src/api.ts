@@ -950,9 +950,14 @@ export type InternalDnsBlocklistUrlStatus = {
 
 export type InternalDnsStatus = {
   enabled: boolean;
+  blocklist_enabled?: boolean;
+  local_records_enabled?: boolean;
   listen: string;
   port: number;
   client_dns: string[];
+  server_dns?: string[];
+  search_domains?: string[];
+  tunnel_dns?: boolean;
   public_upstreams: string[];
   public_domains: string[];
   blocklist_domains: string[];
@@ -966,6 +971,13 @@ export type InternalDnsStatus = {
 
 export type InternalDnsSettingsRequest = {
   enabled: boolean;
+  blocklist_enabled: boolean;
+  local_records_enabled: boolean;
+  server_dns: string[];
+  search_domains: string[];
+  tunnel_dns: boolean;
+  dnsmasq_listen: string;
+  dnsmasq_port: number;
   public_upstreams: string[];
   public_domains: string[];
   blocklist_domains: string[];
@@ -1003,6 +1015,12 @@ export function saveInternalDnsSettings(
       body: body(payload)
     }
   );
+}
+
+export function applyInternalDns(token: string): Promise<CommandResult[]> {
+  return requestJson<CommandResult[]>("/api/internal-dns/apply", token, {
+    method: "POST"
+  });
 }
 
 export function refreshInternalDnsBlocklist(

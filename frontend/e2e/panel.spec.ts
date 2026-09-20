@@ -179,6 +179,8 @@ async function mockApi(page: Page, options: MockOptions = {}) {
       "/api/routing/nft/cleanup": [commandResult],
       "/api/internal-dns/status": {
         enabled: false,
+        blocklist_enabled: false,
+        local_records_enabled: false,
         listen: "10.10.10.1",
         port: 53,
         client_dns: ["1.1.1.1", "8.8.8.8"],
@@ -362,7 +364,7 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
     ["Certificates", "Authority certificates"],
     ["Identity", "OIDC connector"],
     ["Upstream", "Profiles"],
-    ["Internal DNS", "Internal DNS"],
+    ["DNS", "DNS"],
     ["Web / API", "Web / API panel"],
     ["Advanced", "Persistent YAML"]
   ] as const) {
@@ -423,23 +425,43 @@ test("Authentication OTP delivery credentials can be tested with current form va
   });
 });
 
-test("Internal DNS public forwarding fields are editable and saved as arrays", async ({ page }) => {
+test("DNS uses one atomic draft and keeps Save separate from Apply", async ({ page }) => {
   const mutations: NonNullable<MockOptions["mutations"]> = [];
   await mockApi(page, { mutations });
   await signIn(page);
 
   await page.getByRole("button", { name: "Config", exact: true }).click();
-  await page.getByRole("button", { name: "Internal DNS", exact: true }).click();
-  await page.getByLabel("Public DNS upstreams (one IP per line)").fill("1.1.1.1\n8.8.8.8");
-  await page.getByLabel("Public domains (one per line)").fill("example.com\nexample.net");
-  await page.getByRole("button", { name: "Save", exact: true }).first().click();
+  await page.getByRole("button", { name: "DNS", exact: true }).click();
+  await expect(page.getByLabel("DNS request path")).toContainText("Direct server DNS");
+
+  await page.getByLabel("Use built-in resolver").check();
+  await page.getByLabel("Enable local records").check();
+  await page.getByLabel("Enable blocklist").check();
+  await page.getByLabel("DNS servers (same as Server)").fill("9.9.9.9\n1.1.1.1");
+  await page.getByLabel("Upstream DNS servers").fill("1.1.1.1\n8.8.8.8");
+  await page.getByLabel("Domains", { exact: true }).fill("example.com\nexample.net");
+  await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect.poll(() => mutations.find((entry) => entry.path === "/api/internal-dns/settings"))
     .toBeTruthy();
-  const mutation = mutations.find((entry) => entry.path === "/api/internal-dns/settings");
-  const body = JSON.parse(mutation?.body ?? "{}");
-  expect(body.public_upstreams).toEqual(["1.1.1.1", "8.8.8.8"]);
-  expect(body.public_domains).toEqual(["example.com", "example.net"]);
+  const body = JSON.parse(
+    mutations.find((entry) => entry.path === "/api/internal-dns/settings")?.body ?? "{}"
+  );
+  expect(body).toMatchObject({
+    enabled: true,
+    blocklist_enabled: true,
+    local_records_enabled: true,
+    server_dns: ["9.9.9.9", "1.1.1.1"],
+    public_upstreams: ["1.1.1.1", "8.8.8.8"],
+    public_domains: ["example.com", "example.net"]
+  });
+  expect(mutations.some((entry) => entry.path === "/api/internal-dns/apply")).toBe(false);
+
+  await page
+    .getByRole("button", { name: "Apply DNS changes (disconnects active clients)" })
+    .click();
+  await expect.poll(() => mutations.some((entry) => entry.path === "/api/internal-dns/apply"))
+    .toBe(true);
 });
 
 test("server-side routing controls in Upstream settings are inert until Upstream is enabled", async ({
