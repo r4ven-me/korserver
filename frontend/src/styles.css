@@ -1184,6 +1184,58 @@ textarea:focus {
   gap: 12px;
 }
 
+.settings-tabs {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+
+.settings-tab-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.settings-tab {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
+  min-height: 36px;
+  padding: 7px 13px;
+}
+
+.settings-tab:hover {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.settings-tab.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.settings-tab-panel {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  min-width: 0;
+  padding: 16px;
+}
+
+.settings-tab-panel > .settings-details-body {
+  padding: 0;
+}
+
+.settings-tab-panel > .muted-line:first-child {
+  margin-top: 0;
+}
+
 .settings-details {
   border: 1px solid var(--border);
   border-radius: 8px;

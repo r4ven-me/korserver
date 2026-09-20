@@ -42,6 +42,8 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
+  Children,
+  isValidElement,
   lazy,
   Suspense,
   useCallback,
@@ -52,7 +54,7 @@ import {
   useRef,
   useState
 } from "react";
-import type { ChangeEvent, FormEvent, ReactNode } from "react";
+import type { ChangeEvent, FormEvent, ReactElement, ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   applyNft,
@@ -4812,6 +4814,7 @@ function InternalDnsView({
         </div>
       </section>
 
+      <SettingsTabs ariaLabel="DNS resolver settings">
       <details className="panel dns-function-settings">
         <summary>Resolver functions</summary>
         <div className="dns-function-body">
@@ -4865,6 +4868,7 @@ function InternalDnsView({
           <label className="switch"><input checked={draft.logQueries} disabled={!resolverActive} onChange={(event) => onDraftChange({ ...draft, logQueries: event.target.checked })} type="checkbox" /><span>Log queries</span></label>
         </div>
       </details>
+      </SettingsTabs>
 
       <section className="panel dns-actions">
         <div><strong>Save stores the draft only.</strong><p className="muted-line">Apply is separate because active VPN clients will be disconnected.</p></div>
@@ -5631,6 +5635,7 @@ function UpstreamSettingsDialog({
           <IconButton label="Close" icon={X} onClick={onClose} />
         </div>
         <form className="upstream-settings-form" onSubmit={onSave}>
+          <SettingsTabs ariaLabel="Upstream settings">
           <details className="settings-details upstream-settings-section">
             <summary>Connection &amp; health</summary>
             <div className="settings-grid settings-details-body">
@@ -5992,6 +5997,7 @@ function UpstreamSettingsDialog({
               </label>
             </div>
           </details>
+          </SettingsTabs>
 
           <div className="modal-actions">
             <button
@@ -7128,7 +7134,7 @@ function ConfigView({
 
         {!serverSettingsDraft.enabled && <p className="config-disabled-note">Enable the VPN server to edit its dependent settings.</p>}
         {serverSettingsDraft.enabled && (
-          <div className="collapsible-settings-list">
+          <SettingsTabs ariaLabel="VPN server settings">
             <details className="settings-details">
               <summary>Listener &amp; identity</summary>
               <div className="settings-grid settings-details-body">
@@ -7176,7 +7182,7 @@ function ConfigView({
                 </fieldset>
               </div>
             </details>
-          </div>
+          </SettingsTabs>
         )}
 
         <div className="panel-footer config-save-footer">
@@ -7222,6 +7228,7 @@ function ConfigView({
                   </label>
                 </div>
 
+                <SettingsTabs ariaLabel="OTP delivery channels">
                 <details className="settings-details nested-settings-details">
                   <summary>Email delivery</summary>
                   <div className="settings-details-body">
@@ -7264,6 +7271,7 @@ function ConfigView({
                     </div>
                   </div>
                 </details>
+                </SettingsTabs>
               </div>
             </details>
           </div>
@@ -7291,7 +7299,7 @@ function ConfigView({
 
         {!webSettingsDraft.enabled && <p className="config-disabled-note">Enable the Web / API panel to edit its dependent settings.</p>}
         {webSettingsDraft.enabled && (
-          <div className="collapsible-settings-list">
+          <SettingsTabs ariaLabel="Web and API settings">
             <details className="settings-details">
               <summary>Listener &amp; transport security</summary>
               <div className="settings-grid settings-details-body">
@@ -7322,7 +7330,7 @@ function ConfigView({
                 </fieldset>
               </div>
             </details>
-          </div>
+          </SettingsTabs>
         )}
 
         <div className="panel-footer config-save-footer">
@@ -8266,6 +8274,45 @@ function RavenIcon({ className }: { className?: string }) {
 // specific to korclient (see korclient/README.md): a stock OpenConnect
 // client still receives the same values over the standard AnyConnect
 // handshake, but only korclient turns them into real policy-routing.
+function SettingsTabs({ children, ariaLabel }: { children: ReactNode; ariaLabel: string }) {
+  const items = Children.toArray(children).filter(isValidElement) as ReactElement<{
+    children?: ReactNode;
+  }>[];
+  const [activeIndex, setActiveIndex] = useState(0);
+  const safeIndex = Math.min(activeIndex, Math.max(0, items.length - 1));
+  const activeItem = items[safeIndex];
+  const activeChildren = activeItem ? Children.toArray(activeItem.props.children) : [];
+
+  return (
+    <div className="settings-tabs">
+      <div className="settings-tab-list" role="tablist" aria-label={ariaLabel}>
+        {items.map((item, index) => {
+          const itemChildren = Children.toArray(item.props.children);
+          const summary = itemChildren[0];
+          const label = isValidElement(summary) ? summary.props.children : `Section ${index + 1}`;
+          return (
+            <button
+              aria-selected={safeIndex === index}
+              className={safeIndex === index ? "settings-tab active" : "settings-tab"}
+              key={index}
+              onClick={() => setActiveIndex(index)}
+              role="tab"
+              type="button"
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+      {activeItem && (
+        <div className="settings-tab-panel" role="tabpanel">
+          {activeChildren.slice(1)}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function KorclientHint({ text }: { text: string }) {
   const bubbleId = useId();
   const triggerRef = useRef<HTMLSpanElement>(null);

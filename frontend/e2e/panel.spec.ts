@@ -444,8 +444,7 @@ test("DNS uses one atomic draft and keeps Save separate from Apply", async ({ pa
   await page.getByLabel("Enable local records").check();
   await page.getByLabel("Enable blocklist").check();
   await page.getByLabel("DNS servers (same as Server)").fill("9.9.9.9\n1.1.1.1");
-  await expect(page.getByLabel("Upstream DNS servers")).not.toBeVisible();
-  await page.getByText("Resolver functions", { exact: true }).click();
+  await expect(page.getByRole("tab", { name: "Resolver functions" })).toHaveAttribute("aria-selected", "true");
   await page.getByLabel("Upstream DNS servers").fill("1.1.1.1\n8.8.8.8");
   await page.getByLabel("Domains", { exact: true }).fill("example.com\nexample.net");
   await page.getByRole("button", { name: "Save", exact: true }).click();
@@ -487,14 +486,13 @@ test("server-side routing controls in Upstream settings are inert until Upstream
   await page.getByRole("button", { name: "Upstream", exact: true }).click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await dialog.getByText("VPN clients", { exact: true }).click();
-  await dialog.getByText("Server host", { exact: true }).click();
+  await dialog.getByRole("tab", { name: "VPN clients" }).click();
 
-  // Not getByLabel("Mode"): same select accessible-name-concatenation quirk
-  // as "Host mode" below (label text + currently selected option text).
+  // Not getByLabel("Mode"): the select's accessible name includes its selected option.
   await expect(
     dialog.locator("label").filter({ hasText: "Mode" }).first().locator("select")
   ).toBeDisabled();
+  await dialog.getByRole("tab", { name: "Server host" }).click();
   await expect(
     dialog.locator("label").filter({ hasText: "Route this host" }).locator("input")
   ).toBeDisabled();
