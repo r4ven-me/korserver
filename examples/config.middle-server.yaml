@@ -85,8 +85,6 @@ routing:
   nft_prefix: korserver
   split:
     tunnel_dns: true
-    dnsmasq_listen: 10.10.10.1
-    dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt
     domains_file: /var/lib/korserver/domains.txt
     routes:
@@ -94,6 +92,10 @@ routing:
       - 10.20.0.0/16
     domains:
       - corp.example.com
+
+internal_dns:
+  listen: 10.10.10.1
+  port: 53
 
 web:
   enabled: false

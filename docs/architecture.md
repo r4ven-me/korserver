@@ -167,7 +167,7 @@ korserver/
     forced-routing/kill-switch treatment; everything else is masqueraded
     normally through the host, unaffected.
   - In `full`/`split`, VPN clients should be pointed at this server's own
-    dnsmasq (`routing.split.dnsmasq_listen`, via `split.tunnel_dns`) so
+    dnsmasq (`internal_dns.listen`, via `split.tunnel_dns`) so
     split-DNS domain resolution feeds the same nftables set; clients doing
     their *own* split routing/DNS locally instead just point their own
     resolver at this server's VPN address.
@@ -198,7 +198,7 @@ korserver/
     own queries to an upstream DNS reached through the tunnel, draining the
     domain-fed split sets. For domain masks to apply to the host too (in
     `host_mode: split`), point the host's resolver at
-    `routing.split.dnsmasq_listen` (the address already sits on `lo`, see
+    `internal_dns.listen` (the address already sits on `lo`, see
     "Listen address lifecycle"): `nameserver 10.10.10.1` in
     `/etc/resolv.conf`. This replaces the tempting-but-broken pattern of
     connecting the host to its own ocserv as a client: such a session's sync
@@ -265,7 +265,7 @@ korserver/
 
 `internal_dns` turns the VPN server itself into the DNS server for connected clients:
 
-- ocserv pushes the project-owned dnsmasq listen address (`routing.split.dnsmasq_listen`,
+- ocserv pushes the project-owned dnsmasq listen address (`internal_dns.listen`,
   which must be inside `server.ipv4_network`) to clients instead of `server.dns`, plus
   `tunnel-all-dns = true` so blocking cannot be bypassed;
 - dnsmasq forwards queries to the resolvers configured in `server.dns`;

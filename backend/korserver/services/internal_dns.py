@@ -158,8 +158,8 @@ class InternalDnsService:
             "server_dns": list(self.config.server.dns),
             "search_domains": list(self.config.server.search_domains),
             "tunnel_dns": self.config.routing.split.tunnel_dns,
-            "listen": self.config.routing.split.dnsmasq_listen,
-            "port": self.config.routing.split.dnsmasq_port,
+            "listen": self.config.internal_dns.listen,
+            "port": self.config.internal_dns.port,
             "client_dns": self.config.client_dns_servers(),
             "blocklist_domains": self.inline_domains(),
             "blocklist_files": files_status,
@@ -216,7 +216,7 @@ class InternalDnsService:
         step dnsmasq cannot bind to the address and host-originated packets
         to it would follow the default route instead of local delivery.
         """
-        listen = self.config.routing.split.dnsmasq_listen
+        listen = self.config.internal_dns.listen
         return self.runner.run(
             ["ip", "addr", "replace", f"{listen}/32", "dev", "lo"],
             check=False,
@@ -224,7 +224,7 @@ class InternalDnsService:
         )
 
     def remove_listen_address(self, *, dry_run: bool = False) -> CommandResult:
-        listen = self.config.routing.split.dnsmasq_listen
+        listen = self.config.internal_dns.listen
         return self.runner.run(
             ["ip", "addr", "del", f"{listen}/32", "dev", "lo"],
             check=False,

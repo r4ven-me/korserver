@@ -591,8 +591,6 @@ class UpstreamConfig(StrictModel):
 
 class RoutingSplitConfig(StrictModel):
     tunnel_dns: bool = False
-    dnsmasq_listen: str = "10.10.10.1"
-    dnsmasq_port: int = Field(default=53, ge=1, le=65535)
     routes_file: Path = Path("/var/lib/korserver/routes.txt")
     domains_file: Path = Path("/var/lib/korserver/domains.txt")
     routes: list[str] = Field(default_factory=list)
@@ -608,10 +606,6 @@ class RoutingSplitConfig(StrictModel):
     domains_files: list[Path] = Field(default_factory=list)
     domains_urls: list[str] = Field(default_factory=list)
 
-    @field_validator("dnsmasq_listen")
-    @classmethod
-    def validate_dnsmasq_listen(cls, value: str) -> str:
-        return _validate_ip(value)
 
     @field_validator("routes")
     @classmethod
@@ -647,8 +641,8 @@ class HostSplitConfig(StrictModel):
     traffic under routing.host_mode: split -- deliberately a separate list
     from routing.split's, not shared, since an admin may want the host to
     follow entirely different routes/domains than clients do. No
-    tunnel_dns/dnsmasq_listen/dnsmasq_port here: those are about clients
-    picking this server as their DNS, which has no host equivalent -- host
+    tunnel_dns or internal DNS listen/port fields here: those are about
+    clients picking this server as their DNS, which has no host equivalent -- host
     domains are just resolved via whatever DNS the host itself already
     uses (see RoutingService.list_host_domains()).
     """
@@ -743,6 +737,8 @@ class RoutingConfig(StrictModel):
 
 class InternalDnsConfig(StrictModel):
     resolver_enabled: bool = False
+    listen: str = "10.10.10.1"
+    port: int = Field(default=53, ge=1, le=65535)
     blocklist_enabled: bool = False
     local_records_enabled: bool = False
     blocklist_domains: list[str] = Field(default_factory=list)
@@ -753,6 +749,11 @@ class InternalDnsConfig(StrictModel):
     local_records: list[str] = Field(default_factory=list)
     public_upstreams: list[str] = Field(default_factory=list)
     public_domains: list[str] = Field(default_factory=list)
+
+    @field_validator("listen")
+    @classmethod
+    def validate_listen(cls, value: str) -> str:
+        return _validate_ip(value)
 
     @field_validator("blocklist_domains")
     @classmethod
@@ -995,10 +996,10 @@ class AppConfig(StrictModel):
                     field_name=f"upstream.profiles[{target_profile.name!r}]'s derived table_id",
                 )
         if self.dns_tunnel_active():
-            listen_ip = ipaddress.ip_address(self.routing.split.dnsmasq_listen)
+            listen_ip = ipaddress.ip_address(self.internal_dns.listen)
             if listen_ip not in vpn_network:
                 raise ValueError(
-                    "routing.split.dnsmasq_listen must be inside server.ipv4_network "
+                    "internal_dns.listen must be inside server.ipv4_network "
                     "when internal_dns or split-mode DNS tunneling is enabled "
                     "so VPN clients can reach the DNS server"
                 )
@@ -1061,7 +1062,7 @@ class AppConfig(StrictModel):
     def client_dns_servers(self) -> list[str]:
         """DNS servers pushed to VPN clients by ocserv."""
         if self.client_dns_reasons():
-            return [self.routing.split.dnsmasq_listen]
+            return [self.internal_dns.listen]
         return self.server.dns
 
     def generated_path(self, name: str) -> Path:

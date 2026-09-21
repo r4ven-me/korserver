@@ -80,9 +80,10 @@ def test_internal_dns_settings_enable_switches_client_dns(tmp_path: Path) -> Non
 
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert saved["server"]["dns"] == ["9.9.9.9"]
-    assert saved["routing"]["split"]["dnsmasq_listen"] == "10.10.10.2"
-    assert saved["routing"]["split"]["dnsmasq_port"] == 5353
+    assert saved["routing"]["split"] == {"tunnel_dns": False}
     assert saved["internal_dns"]["resolver_enabled"] is True
+    assert saved["internal_dns"]["listen"] == "10.10.10.2"
+    assert saved["internal_dns"]["port"] == 5353
     assert saved["internal_dns"]["blocklist_enabled"] is True
     assert saved["internal_dns"]["blocklist_urls"] == ["https://lists.example.com/hosts.txt"]
 

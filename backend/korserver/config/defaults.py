@@ -99,8 +99,6 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "nft_prefix": "korserver",
         "split": {
             "tunnel_dns": False,
-            "dnsmasq_listen": "10.10.10.1",
-            "dnsmasq_port": 53,
             "routes_file": "/var/lib/korserver/routes.txt",
             "domains_file": "/var/lib/korserver/domains.txt",
             "routes": [],
@@ -109,6 +107,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "internal_dns": {
         "resolver_enabled": False,
+        "listen": "10.10.10.1",
+        "port": 53,
         "blocklist_enabled": False,
         "local_records_enabled": False,
         "blocklist_domains": [],

@@ -125,18 +125,18 @@ routing:
   nft_prefix: korserver
   split:
     tunnel_dns: false
-    dnsmasq_listen: 10.10.10.1
-    dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt
     domains_file: /var/lib/korserver/domains.txt
     routes: []
     domains: []
 
-# Internal DNS features use the project-owned dnsmasq instance listening on
-# routing.split.dnsmasq_listen. Any enabled feature makes dnsmasq active and
-# causes VPN clients to use it; upstream resolvers are taken from server.dns.
+# Internal DNS features use the project-owned dnsmasq instance at listen:port.
+# Any enabled feature makes dnsmasq active and causes VPN clients to use it;
+# upstream resolvers are taken from server.dns.
 internal_dns:
   resolver_enabled: false
+  listen: 10.10.10.1
+  port: 53
   blocklist_enabled: false
   local_records_enabled: false
   # Optional forwarding for selected domain zones. Clients still use this

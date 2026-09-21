@@ -212,7 +212,7 @@ def test_local_records_rejects_invalid_ip(tmp_path: Path) -> None:
 
 
 def test_internal_dns_requires_listen_inside_vpn_subnet(tmp_path: Path) -> None:
-    with pytest.raises(ValueError, match="dnsmasq_listen"):
+    with pytest.raises(ValueError, match="internal_dns.listen"):
         _config(
             tmp_path,
             {

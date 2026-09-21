@@ -550,8 +550,6 @@ function App() {
     tunnelDns: false,
     hostTraffic: false,
     hostMode: "full",
-    dnsmasqListen: "10.10.10.1",
-    dnsmasqPort: 53,
     mainInterface: "auto",
     fwmark: "0x0c01",
     tableId: 1201,
@@ -567,6 +565,8 @@ function App() {
   });
   const [internalDnsDraft, setInternalDnsDraft] = useState<InternalDnsDraft>({
     enabled: false,
+    listen: "10.10.10.1",
+    port: 53,
     blocklistEnabled: false,
     localRecordsEnabled: false,
     publicUpstreamsText: "",
@@ -890,6 +890,8 @@ function App() {
         if (internalDns.status === "fulfilled") {
           setInternalDnsDraft({
             enabled: internalDns.value.enabled,
+            listen: internalDns.value.listen,
+            port: internalDns.value.port,
             blocklistEnabled:
               internalDns.value.blocklist_enabled ??
               (internalDns.value.blocklist_domains.length > 0 ||
@@ -1326,8 +1328,6 @@ function App() {
         tunnel_dns: routingDraft.tunnelDns,
         host_traffic: routingDraft.hostTraffic,
         host_mode: routingDraft.hostMode,
-        dnsmasq_listen: routingDraft.dnsmasqListen,
-        dnsmasq_port: routingDraft.dnsmasqPort,
         main_interface: routingDraft.mainInterface,
         fwmark: routingDraft.fwmark,
         table_id: routingDraft.tableId,
@@ -1476,14 +1476,14 @@ function App() {
       "DNS settings saved",
       (token) =>
         saveInternalDnsSettings(token, {
-          enabled: internalDnsDraft.enabled,
+          resolver_enabled: internalDnsDraft.enabled,
+          listen: internalDnsDraft.listen,
+          port: internalDnsDraft.port,
           blocklist_enabled: internalDnsDraft.blocklistEnabled,
           local_records_enabled: internalDnsDraft.localRecordsEnabled,
           server_dns: splitLines(serverSettingsDraft.dns),
           search_domains: splitLines(serverSettingsDraft.searchDomains),
           tunnel_dns: routingDraft.tunnelDns,
-          dnsmasq_listen: routingDraft.dnsmasqListen,
-          dnsmasq_port: routingDraft.dnsmasqPort,
           public_upstreams: splitLines(internalDnsDraft.publicUpstreamsText),
           public_domains: splitLines(internalDnsDraft.publicDomainsText),
           blocklist_domains: splitLines(internalDnsDraft.domainsText),
@@ -3327,8 +3327,6 @@ function readRoutingDraft(config: Record<string, unknown>): {
   tunnelDns: boolean;
   hostTraffic: boolean;
   hostMode: string;
-  dnsmasqListen: string;
-  dnsmasqPort: number;
   mainInterface: string;
   fwmark: string;
   tableId: number;
@@ -3351,8 +3349,6 @@ function readRoutingDraft(config: Record<string, unknown>): {
     tunnelDns: readBoolean(split.tunnel_dns, false),
     hostTraffic: readBoolean(routing.host_traffic, false),
     hostMode: readString(routing.host_mode, "full"),
-    dnsmasqListen: readString(split.dnsmasq_listen, "10.10.10.1"),
-    dnsmasqPort: readNumber(split.dnsmasq_port, 53),
     mainInterface: readString(routing.main_interface, "auto"),
     fwmark: readString(routing.fwmark, "0x0c01"),
     tableId: readNumber(routing.table_id, 1201),
@@ -4553,8 +4549,6 @@ type RoutingDraft = {
   tunnelDns: boolean;
   hostTraffic: boolean;
   hostMode: string;
-  dnsmasqListen: string;
-  dnsmasqPort: number;
   mainInterface: string;
   fwmark: string;
   tableId: number;
@@ -4680,6 +4674,8 @@ function RoutingListSourcesPanel({
 
 type InternalDnsDraft = {
   enabled: boolean;
+  listen: string;
+  port: number;
   blocklistEnabled: boolean;
   localRecordsEnabled: boolean;
   publicUpstreamsText: string;
@@ -4873,8 +4869,8 @@ function InternalDnsView({
         </p>
         <div className="settings-grid dns-function-body">
           <label className="switch"><input checked={dnsServerDraft.tunnelDns} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, tunnelDns: event.target.checked })} type="checkbox" /><span>Resolve split-routing domains through the built-in resolver</span></label>
-          <label><span>Built-in resolver listen address</span><input disabled={!resolverActive} value={dnsServerDraft.dnsmasqListen} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, dnsmasqListen: event.target.value })} /></label>
-          <label><span>Built-in resolver port</span><input disabled={!resolverActive} min={1} max={65535} type="number" value={dnsServerDraft.dnsmasqPort} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, dnsmasqPort: Math.max(1, Number(event.target.value) || 53) })} /></label>
+          <label><span>Built-in resolver listen address</span><input disabled={!resolverActive} value={draft.listen} onChange={(event) => onDraftChange({ ...draft, listen: event.target.value })} /></label>
+          <label><span>Built-in resolver port</span><input disabled={!resolverActive} min={1} max={65535} type="number" value={draft.port} onChange={(event) => onDraftChange({ ...draft, port: Math.max(1, Number(event.target.value) || 53) })} /></label>
           <label><span>Cache size</span><input disabled={!resolverActive} type="number" min={0} max={10000} value={draft.cacheSize} onChange={(event) => onDraftChange({ ...draft, cacheSize: Math.max(0, Number(event.target.value) || 0) })} /></label>
           <label className="switch"><input checked={draft.logQueries} disabled={!resolverActive} onChange={(event) => onDraftChange({ ...draft, logQueries: event.target.checked })} type="checkbox" /><span>Log queries</span></label>
         </div>

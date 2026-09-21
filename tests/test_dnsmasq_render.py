@@ -15,7 +15,6 @@ def test_dnsmasq_render_contains_domain_nftset(tmp_path: Path) -> None:
                 "split": {
                     "tunnel_dns": True,
                     "domains": ["example.com"],
-                    "dnsmasq_listen": "10.10.10.1",
                 },
             }
         },
@@ -43,7 +42,6 @@ def test_dnsmasq_render_ignores_split_domains_when_client_traffic_is_off(
                 "split": {
                     "tunnel_dns": True,
                     "domains": ["example.com"],
-                    "dnsmasq_listen": "10.10.10.1",
                 },
             }
         },
@@ -136,7 +134,6 @@ def test_dnsmasq_render_filters_own_listen_address_from_upstreams(tmp_path: Path
                 "split": {
                     "tunnel_dns": True,
                     "domains": ["corp.example.com"],
-                    "dnsmasq_listen": "10.10.10.1",
                 },
             },
         },

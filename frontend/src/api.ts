@@ -884,8 +884,6 @@ export function saveRoutingSettings(
     tunnel_dns: boolean;
     host_traffic: boolean;
     host_mode: string;
-    dnsmasq_listen: string;
-    dnsmasq_port: number;
     main_interface: string;
     fwmark: string;
     table_id: number;
@@ -970,14 +968,14 @@ export type InternalDnsStatus = {
 };
 
 export type InternalDnsSettingsRequest = {
-  enabled: boolean;
+  resolver_enabled: boolean;
+  listen: string;
+  port: number;
   blocklist_enabled: boolean;
   local_records_enabled: boolean;
   server_dns: string[];
   search_domains: string[];
   tunnel_dns: boolean;
-  dnsmasq_listen: string;
-  dnsmasq_port: number;
   public_upstreams: string[];
   public_domains: string[];
   blocklist_domains: string[];

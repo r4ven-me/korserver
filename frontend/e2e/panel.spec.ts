@@ -430,7 +430,7 @@ test("Authentication OTP delivery credentials can be tested with current form va
   });
 });
 
-test("DNS uses one atomic draft and keeps Save separate from Apply", async ({ page }) => {
+test("DNS Save persists one atomic draft and applies it", async ({ page }) => {
   const mutations: NonNullable<MockOptions["mutations"]> = [];
   await mockApi(page, { mutations });
   await signIn(page);
@@ -455,7 +455,9 @@ test("DNS uses one atomic draft and keeps Save separate from Apply", async ({ pa
     mutations.find((entry) => entry.path === "/api/internal-dns/settings")?.body ?? "{}"
   );
   expect(body).toMatchObject({
-    enabled: true,
+    resolver_enabled: true,
+    listen: "10.10.10.1",
+    port: 53,
     blocklist_enabled: true,
     local_records_enabled: true,
     server_dns: ["9.9.9.9", "1.1.1.1"],

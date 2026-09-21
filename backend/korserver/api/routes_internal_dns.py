@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import BaseModel, Field
 
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
@@ -18,20 +18,9 @@ class InternalDnsSettingsRequest(BaseModel):
     server_dns: list[str] = Field(default_factory=lambda: ["1.1.1.1", "8.8.8.8"])
     search_domains: list[str] = Field(default_factory=list)
     tunnel_dns: bool = False
-    enabled: bool = Field(
-        default=False,
-        validation_alias=AliasChoices("enabled", "resolver_enabled"),
-    )
-    dnsmasq_listen: str = Field(
-        default="10.10.10.1",
-        validation_alias=AliasChoices("dnsmasq_listen", "listen"),
-    )
-    dnsmasq_port: int = Field(
-        default=53,
-        ge=1,
-        le=65535,
-        validation_alias=AliasChoices("dnsmasq_port", "port"),
-    )
+    resolver_enabled: bool = False
+    listen: str = "10.10.10.1"
+    port: int = Field(default=53, ge=1, le=65535)
     blocklist_enabled: bool = False
     local_records_enabled: bool = False
     blocklist_domains: list[str] = Field(default_factory=list)
@@ -75,15 +64,11 @@ def save_internal_dns_settings(
             "dns": payload.server_dns,
             "search_domains": payload.search_domains,
         },
-        "routing": {
-            "split": {
-                "tunnel_dns": payload.tunnel_dns,
-                "dnsmasq_listen": payload.dnsmasq_listen,
-                "dnsmasq_port": payload.dnsmasq_port,
-            }
-        },
+        "routing": {"split": {"tunnel_dns": payload.tunnel_dns}},
         "internal_dns": {
-            "resolver_enabled": payload.enabled,
+            "resolver_enabled": payload.resolver_enabled,
+            "listen": payload.listen,
+            "port": payload.port,
             "blocklist_enabled": payload.blocklist_enabled,
             "local_records_enabled": payload.local_records_enabled,
             "blocklist_domains": payload.blocklist_domains,

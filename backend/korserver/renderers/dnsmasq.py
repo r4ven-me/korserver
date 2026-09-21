@@ -26,7 +26,7 @@ class DnsmasqConfigRenderer(TemplateRenderer):
         # there (that IS the client DNS). dnsmasq silently ignores upstreams on
         # a local interface, which would leave split-domain masks pointing at a
         # dropped server — so keep only real upstreams.
-        listen = config.routing.split.dnsmasq_listen
+        listen = config.internal_dns.listen
         upstream_dns = [dns for dns in config.server.dns if dns != listen]
         local_records = (
             [

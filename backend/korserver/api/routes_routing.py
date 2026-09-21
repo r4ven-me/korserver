@@ -37,8 +37,6 @@ class RoutingSettingsRequest(BaseModel):
     tunnel_dns: bool = False
     host_traffic: bool = False
     host_mode: str = "full"
-    dnsmasq_listen: str | None = None
-    dnsmasq_port: int | None = None
     main_interface: str | None = None
     fwmark: str | None = None
     table_id: int | None = None
@@ -253,10 +251,6 @@ def save_routing_settings(
         "domains_files": payload.domains_files,
         "domains_urls": payload.domains_urls,
     }
-    if payload.dnsmasq_listen is not None:
-        split["dnsmasq_listen"] = payload.dnsmasq_listen
-    if payload.dnsmasq_port is not None:
-        split["dnsmasq_port"] = payload.dnsmasq_port
     host_split: dict[str, object] = {
         "routes_files": payload.host_routes_files,
         "routes_urls": payload.host_routes_urls,

@@ -451,8 +451,6 @@ routing:
   nft_prefix: korserver
   split:
     tunnel_dns: true
-    dnsmasq_listen: 10.10.10.1
-    dnsmasq_port: 53
     routes_file: /var/lib/korserver/routes.txt
     domains_file: /var/lib/korserver/domains.txt
     routes:
@@ -464,6 +462,8 @@ routing:
 
 internal_dns:
   resolver_enabled: true
+  listen: 10.10.10.1
+  port: 53
   blocklist_enabled: true
   local_records_enabled: true
   blocklist_domains:
@@ -552,6 +552,9 @@ Nesting is expressed with a double underscore:
 ```env
 KORSERVER_SERVER__PORT=4443
 KORSERVER_SERVER__DNS='["1.1.1.1", "9.9.9.9"]'
+KORSERVER_INTERNAL_DNS__RESOLVER_ENABLED=true
+KORSERVER_INTERNAL_DNS__LISTEN=10.10.10.1
+KORSERVER_INTERNAL_DNS__PORT=53
 KORSERVER_WEB__ENABLED=false
 ```
 
@@ -925,13 +928,16 @@ routing:
   nft_prefix: korserver
   split:
     tunnel_dns: true
-    dnsmasq_listen: 10.10.10.1
     routes:
       - 192.168.25.0/24
       - 10.20.0.0/16
       - 10.11.11.1
     domains:
       - corp.example.com
+
+internal_dns:
+  listen: 10.10.10.1
+  port: 53
 ```
 
 There's no separate "ips" list - a single host is just a route with a /32 mask
@@ -1064,12 +1070,15 @@ routing:
   nft_prefix: korserver
   split:
     tunnel_dns: true
-    dnsmasq_listen: 10.10.10.1
     routes:
       - 192.168.25.0/24
       - 10.20.0.0/16
     domains:
       - corp.example.com
+
+internal_dns:
+  listen: 10.10.10.1
+  port: 53
 ```
 
 Put the secret in `.env`:
