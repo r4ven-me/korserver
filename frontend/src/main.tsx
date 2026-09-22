@@ -4795,86 +4795,94 @@ function InternalDnsView({
         </div>
       </section>
 
-      <section className="panel">
-        <div className="panel-header"><h2>Default upstream</h2></div>
-        <p className="muted-line">Same as Server. Used directly when the resolver is off and as the resolver default otherwise.</p>
-        <div className="settings-grid internal-dns-grid">
-          <label className="blocklist-domains">
-            <span>DNS servers (same as Server)</span>
-            <textarea
-              aria-label="DNS servers (same as Server)"
-              rows={3}
-              value={serverDraft.dns}
-              onChange={(event) => onServerDraftChange({ ...serverDraft, dns: event.target.value })}
-            />
-          </label>
-          <label className="blocklist-domains">
-            <span>Search domains (same as Server)</span>
-            <textarea
-              rows={3}
-              value={serverDraft.searchDomains}
-              onChange={(event) =>
-                onServerDraftChange({ ...serverDraft, searchDomains: event.target.value })
-              }
-            />
-          </label>
-        </div>
-      </section>
+      <SettingsTabs ariaLabel="DNS settings">
+        <details>
+          <summary>Default upstream</summary>
+          <div className="settings-grid internal-dns-grid">
+            <label className="blocklist-domains">
+              <span>Default upstream DNS servers</span>
+              <textarea
+                aria-label="DNS servers (same as Server)"
+                rows={3}
+                value={serverDraft.dns}
+                onChange={(event) => onServerDraftChange({ ...serverDraft, dns: event.target.value })}
+              />
+            </label>
+            <label className="blocklist-domains">
+              <span>Search domains</span>
+              <textarea
+                rows={3}
+                value={serverDraft.searchDomains}
+                onChange={(event) =>
+                  onServerDraftChange({ ...serverDraft, searchDomains: event.target.value })
+                }
+              />
+            </label>
+          </div>
+          <p className="muted-line dns-shared-note">
+            These are the server-wide upstream resolvers. VPN clients use them directly when the
+            built-in resolver is off; otherwise the built-in resolver forwards unmatched queries to them.
+          </p>
+        </details>
 
-      <SettingsTabs ariaLabel="DNS resolver settings">
-      <details className="panel dns-function-settings">
-        <summary>Resolver functions</summary>
-        <div className="dns-function-body">
-          <section className="dns-subsection">
-            <div className="panel-header"><h2>Local records</h2></div>
-            <textarea
-              aria-label="Local records"
-              disabled={!resolverActive || !draft.localRecordsEnabled}
-              rows={6}
-              placeholder={"nas.corp.local 10.11.11.5\nprinter.corp.local 10.11.11.6"}
-              value={draft.localRecordsText}
-              onChange={(event) => onDraftChange({ ...draft, localRecordsText: event.target.value })}
-            />
-          </section>
+        <details>
+          <summary>Resolver</summary>
+          <div className="settings-grid">
+            <label><span>Listen address</span><input disabled={!resolverActive} value={draft.listen} onChange={(event) => onDraftChange({ ...draft, listen: event.target.value })} /></label>
+            <label><span>Port</span><input disabled={!resolverActive} min={1} max={65535} type="number" value={draft.port} onChange={(event) => onDraftChange({ ...draft, port: Math.max(1, Number(event.target.value) || 53) })} /></label>
+            <label><span>Cache size</span><input disabled={!resolverActive} type="number" min={0} max={10000} value={draft.cacheSize} onChange={(event) => onDraftChange({ ...draft, cacheSize: Math.max(0, Number(event.target.value) || 0) })} /></label>
+            <label className="switch"><input checked={draft.logQueries} disabled={!resolverActive} onChange={(event) => onDraftChange({ ...draft, logQueries: event.target.checked })} type="checkbox" /><span>Log queries</span></label>
+          </div>
+        </details>
 
-          <section className="dns-subsection">
-            <div className="panel-header"><h2>Blocklist</h2>{status && <Pill kind="muted">{status.total} domains</Pill>}</div>
-            <div className="settings-grid internal-dns-grid">
-              <label className="blocklist-domains"><span>Blocked domains</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={5} value={draft.domainsText} onChange={(event) => onDraftChange({ ...draft, domainsText: event.target.value })} /></label>
-              <label className="blocklist-domains"><span>Blocklist files</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={3} value={draft.filesText} onChange={(event) => onDraftChange({ ...draft, filesText: event.target.value })} /></label>
-              <label className="blocklist-domains"><span>Blocklist URLs</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={3} value={draft.urlsText} onChange={(event) => onDraftChange({ ...draft, urlsText: event.target.value })} /></label>
-            </div>
-            {status && status.blocklist_urls.length > 0 && (
-              <ul className="blocklist-url-status">{status.blocklist_urls.map((entry) => (
-                <li key={entry.url} className="blocklist-url-entry"><code>{entry.url}</code><div className="toolbar blocklist-url-actions"><ActionButton label="Validate URL" icon={Eye} busy={busy === `internal-dns-preview-${entry.url}`} onClick={() => onPreviewUrl(entry.url)} /><ActionButton label="Download & apply" icon={Download} busy={busy === `internal-dns-refresh-${entry.url}`} onClick={() => onRefreshUrl(entry.url)} /></div></li>
-              ))}</ul>
-            )}
-          </section>
+        <details>
+          <summary>Local records</summary>
+          <textarea
+            aria-label="Local records"
+            disabled={!resolverActive || !draft.localRecordsEnabled}
+            rows={8}
+            placeholder={"nas.corp.local 10.11.11.5\nprinter.corp.local 10.11.11.6"}
+            value={draft.localRecordsText}
+            onChange={(event) => onDraftChange({ ...draft, localRecordsText: event.target.value })}
+          />
+          {!draft.localRecordsEnabled && <p className="config-disabled-note">Enable local records above to edit this list.</p>}
+        </details>
 
-          <section className="dns-subsection">
-            <div className="panel-header"><h2>Upstream DNS rules</h2></div>
-            <div className="settings-grid internal-dns-grid">
-              <label className="blocklist-domains"><span>Upstream DNS servers</span><textarea rows={4} value={draft.publicUpstreamsText} onChange={(event) => onDraftChange({ ...draft, publicUpstreamsText: event.target.value })} /></label>
-              <label className="blocklist-domains"><span>Domains</span><textarea rows={4} value={draft.publicDomainsText} onChange={(event) => onDraftChange({ ...draft, publicDomainsText: event.target.value })} /></label>
-            </div>
-          </section>
-        </div>
-      </details>
+        <details>
+          <summary>Blocklist</summary>
+          <div className="panel-header"><h2>Blocklist sources</h2>{status && <Pill kind="muted">{status.total} domains</Pill>}</div>
+          <div className="settings-grid internal-dns-grid">
+            <label className="blocklist-domains"><span>Blocked domains</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={5} value={draft.domainsText} onChange={(event) => onDraftChange({ ...draft, domainsText: event.target.value })} /></label>
+            <label className="blocklist-domains"><span>Blocklist files</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={3} value={draft.filesText} onChange={(event) => onDraftChange({ ...draft, filesText: event.target.value })} /></label>
+            <label className="blocklist-domains"><span>Blocklist URLs</span><textarea disabled={!resolverActive || !draft.blocklistEnabled} rows={3} value={draft.urlsText} onChange={(event) => onDraftChange({ ...draft, urlsText: event.target.value })} /></label>
+          </div>
+          {status && status.blocklist_urls.length > 0 && (
+            <ul className="blocklist-url-status">{status.blocklist_urls.map((entry) => (
+              <li key={entry.url} className="blocklist-url-entry"><code>{entry.url}</code><div className="toolbar blocklist-url-actions"><ActionButton label="Validate URL" icon={Eye} busy={busy === `internal-dns-preview-${entry.url}`} onClick={() => onPreviewUrl(entry.url)} /><ActionButton label="Download & apply" icon={Download} busy={busy === `internal-dns-refresh-${entry.url}`} onClick={() => onRefreshUrl(entry.url)} /></div></li>
+            ))}</ul>
+          )}
+          {!draft.blocklistEnabled && <p className="config-disabled-note">Enable the blocklist above to edit its sources.</p>}
+        </details>
 
-      <details className="panel dns-advanced">
-        <summary>Advanced resolver settings</summary>
-        <p className="muted-line dns-shared-note">
-          These routing fields are shared with the Upstream settings. Changing them here changes
-          the same saved values there; they are not separate DNS servers.
-        </p>
-        <div className="settings-grid dns-function-body">
-          <label className="switch"><input checked={dnsServerDraft.tunnelDns} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, tunnelDns: event.target.checked })} type="checkbox" /><span>Resolve split-routing domains through the built-in resolver</span></label>
-          <label><span>Built-in resolver listen address</span><input disabled={!resolverActive} value={draft.listen} onChange={(event) => onDraftChange({ ...draft, listen: event.target.value })} /></label>
-          <label><span>Built-in resolver port</span><input disabled={!resolverActive} min={1} max={65535} type="number" value={draft.port} onChange={(event) => onDraftChange({ ...draft, port: Math.max(1, Number(event.target.value) || 53) })} /></label>
-          <label><span>Cache size</span><input disabled={!resolverActive} type="number" min={0} max={10000} value={draft.cacheSize} onChange={(event) => onDraftChange({ ...draft, cacheSize: Math.max(0, Number(event.target.value) || 0) })} /></label>
-          <label className="switch"><input checked={draft.logQueries} disabled={!resolverActive} onChange={(event) => onDraftChange({ ...draft, logQueries: event.target.checked })} type="checkbox" /><span>Log queries</span></label>
-        </div>
-      </details>
+        <details>
+          <summary>DNS forwarding</summary>
+          <p className="muted-line">Forward only the listed domains to these DNS servers. Other queries use the default upstream tab.</p>
+          <div className="settings-grid internal-dns-grid">
+            <label className="blocklist-domains"><span>DNS servers</span><textarea disabled={!resolverActive} rows={4} value={draft.publicUpstreamsText} onChange={(event) => onDraftChange({ ...draft, publicUpstreamsText: event.target.value })} /></label>
+            <label className="blocklist-domains"><span>Domains</span><textarea disabled={!resolverActive} rows={4} value={draft.publicDomainsText} onChange={(event) => onDraftChange({ ...draft, publicDomainsText: event.target.value })} /></label>
+          </div>
+        </details>
+
+        <details>
+          <summary>Split DNS integration</summary>
+          <p className="muted-line dns-shared-note">
+            This switch belongs to split routing and controls whether split-routing domains are
+            resolved through the built-in resolver.
+          </p>
+          <div className="settings-grid">
+            <label className="switch"><input checked={dnsServerDraft.tunnelDns} onChange={(event) => onDnsServerDraftChange({ ...dnsServerDraft, tunnelDns: event.target.checked })} type="checkbox" /><span>Resolve split-routing domains through the built-in resolver</span></label>
+          </div>
+        </details>
       </SettingsTabs>
 
       <section className="panel dns-actions">
@@ -4954,6 +4962,10 @@ function IdentityView({
         </div>
         <Pill kind="warning">Experimental</Pill>
       </section>
+
+      <SettingsTabs ariaLabel="Identity settings">
+        <details>
+          <summary>Group selection</summary>
       <section className="panel">
         <div className="panel-header">
           <h2>Group routing</h2>
@@ -5021,7 +5033,10 @@ function IdentityView({
           />
         </div>
       </section>
+        </details>
 
+        <details>
+          <summary>OIDC connector</summary>
       <section className="panel">
         <div className="panel-header">
           <h2>OIDC connector</h2>
@@ -5119,7 +5134,11 @@ function IdentityView({
           />
         </div>
       </section>
+        </details>
 
+        <details>
+          <summary>Providers &amp; group policies</summary>
+          <div className="view-stack">
       <section className="split">
         <section className="panel">
           <div className="panel-header">
@@ -5212,7 +5231,7 @@ function IdentityView({
             <div className="panel-footer">
               <button className="primary-button" disabled={busy === "oidc-provider"} type="submit">
                 <Save size={18} aria-hidden="true" />
-                <span>Save provider</span>
+                <span>Save</span>
               </button>
             </div>
           </form>
@@ -5335,7 +5354,7 @@ function IdentityView({
             <div className="panel-footer">
               <button className="primary-button" disabled={busy === "group-policy"} type="submit">
                 <Save size={18} aria-hidden="true" />
-                <span>Save group</span>
+                <span>Save</span>
               </button>
             </div>
           </form>
@@ -5385,6 +5404,9 @@ function IdentityView({
           </Table>
         </section>
       </section>
+          </div>
+        </details>
+      </SettingsTabs>
 
       {commandOutput && (
         <LastCommandPanel title="Last identity command" result={commandOutput} onClose={onClearCommand} />
@@ -6440,6 +6462,10 @@ function CertificatesView({
   const leEnabled = Boolean(letsEncryptDraft.enabled);
   return (
     <div className="view-stack">
+      <SettingsTabs ariaLabel="Certificate settings">
+        <details>
+          <summary>Certificate authority</summary>
+          <div className="view-stack">
       <section className="panel">
         <div className="panel-header">
           <h2>Authority certificates</h2>
@@ -6597,7 +6623,12 @@ function CertificatesView({
           </div>
         </section>
       </div>
+          </div>
+        </details>
 
+        <details>
+          <summary>Server certificate</summary>
+          <div className="view-stack">
       <section className="panel">
         <div className="panel-header">
           <h2>Active certificate</h2>
@@ -6690,7 +6721,11 @@ function CertificatesView({
           </div>
         </form>
       </section>
+          </div>
+        </details>
 
+        <details>
+          <summary>Let's Encrypt</summary>
       <section className="panel">
         <div className="panel-header">
           <h2>Let's Encrypt</h2>
@@ -6834,7 +6869,7 @@ function CertificatesView({
               onClick={() => onSetLetsEncryptEnabled(!leEnabled)}
             />
             <ActionButton
-              label="Save renewal"
+              label="Save"
               icon={Save}
               title="Save Let's Encrypt renewal settings to persistent YAML"
               busy={busy === "le-settings"}
@@ -6868,6 +6903,8 @@ function CertificatesView({
         </form>
         {status?.letsencrypt.paths && <CertificatePathsView paths={status.letsencrypt.paths} />}
       </section>
+        </details>
+      </SettingsTabs>
 
       {commandOutput && (
         <LastCommandPanel title="Last certificate command" result={commandOutput} onClose={onClearCommand} />

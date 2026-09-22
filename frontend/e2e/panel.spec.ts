@@ -362,7 +362,7 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
     ["Server", "VPN server"],
     ["Authentication", "Authentication methods"],
     ["Certificates", "Authority certificates"],
-    ["Identity · Experimental", "OIDC connector"],
+    ["Identity · Experimental", "Group routing"],
     ["Upstream", "Profiles"],
     ["DNS", "DNS"],
     ["Web / API", "Web / API panel"],
@@ -370,6 +370,16 @@ test("Config hub exposes every config sub-section behind its own sub-nav pill", 
   ] as const) {
     await page.getByRole("button", { name: pill, exact: true }).click();
     await expect(page.getByRole("heading", { name: heading, exact: true })).toBeVisible();
+  }
+
+  await page.getByRole("button", { name: "Certificates", exact: true }).click();
+  for (const tab of ["Certificate authority", "Server certificate", "Let's Encrypt"]) {
+    await expect(page.getByRole("tab", { name: tab, exact: true })).toBeVisible();
+  }
+
+  await page.getByRole("button", { name: "Identity · Experimental", exact: true }).click();
+  for (const tab of ["Group selection", "OIDC connector", "Providers & group policies"]) {
+    await expect(page.getByRole("tab", { name: tab, exact: true })).toBeVisible();
   }
 });
 
@@ -443,8 +453,8 @@ test("DNS Save persists one atomic draft and applies it", async ({ page }) => {
   await page.getByLabel("Enable local records").check();
   await page.getByLabel("Enable blocklist").check();
   await page.getByLabel("DNS servers (same as Server)").fill("9.9.9.9\n1.1.1.1");
-  await expect(page.getByRole("tab", { name: "Resolver functions" })).toHaveAttribute("aria-selected", "true");
-  await page.getByLabel("Upstream DNS servers").fill("1.1.1.1\n8.8.8.8");
+  await page.getByRole("tab", { name: "DNS forwarding", exact: true }).click();
+  await page.getByLabel("DNS servers", { exact: true }).fill("1.1.1.1\n8.8.8.8");
   await page.getByLabel("Domains", { exact: true }).fill("example.com\nexample.net");
   page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Save", exact: true }).click();
