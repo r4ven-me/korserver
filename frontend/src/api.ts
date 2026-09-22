@@ -1006,8 +1006,18 @@ export function fetchInternalDnsStatus(token: string): Promise<InternalDnsStatus
 export function saveInternalDnsSettings(
   token: string,
   payload: InternalDnsSettingsRequest
-): Promise<{ status: string; internal_dns: InternalDnsStatus }> {
-  return requestJson<{ status: string; internal_dns: InternalDnsStatus }>(
+): Promise<{
+  status: string;
+  reconnect_required: boolean;
+  commands: CommandResult[];
+  internal_dns: InternalDnsStatus;
+}> {
+  return requestJson<{
+    status: string;
+    reconnect_required: boolean;
+    commands: CommandResult[];
+    internal_dns: InternalDnsStatus;
+  }>(
     "/api/internal-dns/settings",
     token,
     {

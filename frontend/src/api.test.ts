@@ -198,12 +198,15 @@ describe("saveUpstreamProfile", () => {
 });
 
 describe("internal DNS settings API", () => {
-  it("saves the complete DNS draft atomically", async () => {
+  it("saves and applies the complete DNS draft atomically", async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ status: "saved" }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" }
-      })
+      new Response(
+        JSON.stringify({ status: "saved_and_applied", reconnect_required: false, commands: [] }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        }
+      )
     );
     vi.stubGlobal("fetch", fetchMock);
     const payload = {

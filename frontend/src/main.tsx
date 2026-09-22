@@ -59,7 +59,6 @@ import { createRoot } from "react-dom/client";
 import {
   applyNft,
   changePassword,
-  applyInternalDns,
   confirmTotp,
   connectUpstreamProfile,
   createCertificate,
@@ -1468,12 +1467,9 @@ function App() {
   };
 
   const handleSaveInternalDnsSettings = async () => {
-    if (!confirmAction("Save and apply DNS settings now? Active VPN clients will be disconnected and must reconnect.")) {
-      return;
-    }
     const result = await runAction(
       "internal-dns-settings",
-      "DNS settings saved",
+      "DNS settings saved and applied",
       (token) =>
         saveInternalDnsSettings(token, {
           resolver_enabled: internalDnsDraft.enabled,
@@ -1492,30 +1488,18 @@ function App() {
           cache_size: internalDnsDraft.cacheSize,
           log_queries: internalDnsDraft.logQueries,
           local_records: splitLines(internalDnsDraft.localRecordsText)
-        })
-    );
-    if (result !== null) {
-      const applied = await runAction(
-        "internal-dns-apply",
-        "DNS settings saved and applied; active VPN clients are reconnecting",
-        (token) => applyInternalDns(token),
-        { reload: false }
-      );
-      recordCommand(
-        "internal_dns",
-        applied ?? syntheticCommand(["korctl", "dns", "settings"], "saved")
-      );
-    }
-  };
-
-  const handleApplyInternalDns = async () => {
-    const result = await runAction(
-      "internal-dns-apply",
-      "DNS changes applied; active VPN clients are reconnecting",
-      (token) => applyInternalDns(token),
+        }),
       { reload: false }
     );
-    if (result !== null) recordCommand("internal_dns", result);
+    if (result !== null) {
+      recordCommand("internal_dns", result.commands);
+      setNotice({
+        kind: result.reconnect_required ? "warning" : "ok",
+        text: result.reconnect_required
+          ? "DNS settings applied; client-facing DNS changed, so active VPN clients are reconnecting"
+          : "DNS settings applied without disconnecting VPN clients"
+      });
+    }
   };
 
   const handleRefreshInternalDnsBlocklist = async (url: string, preview: boolean) => {
@@ -2409,7 +2393,6 @@ function App() {
             onDnsServerDraftChange={setRoutingDraft}
             onServerDraftChange={setServerSettingsDraft}
             onSave={() => void handleSaveInternalDnsSettings()}
-            onApply={() => void handleApplyInternalDns()}
             onPreviewUrl={(url) => void handleRefreshInternalDnsBlocklist(url, true)}
             onRefreshUrl={(url) => void handleRefreshInternalDnsBlocklist(url, false)}
           />
@@ -4703,7 +4686,6 @@ function InternalDnsView({
   onDnsServerDraftChange,
   onServerDraftChange,
   onSave,
-  onApply,
   onPreviewUrl,
   onRefreshUrl
 }: {
@@ -4719,7 +4701,6 @@ function InternalDnsView({
   onDnsServerDraftChange: (value: RoutingDraft) => void;
   onServerDraftChange: (value: ServerSettingsDraft) => void;
   onSave: () => void;
-  onApply: () => void;
   onPreviewUrl: (url: string) => void;
   onRefreshUrl: (url: string) => void;
 }) {
@@ -4889,7 +4870,7 @@ function InternalDnsView({
       </SettingsTabs>
 
       <section className="panel dns-actions">
-        <div><strong>Save and apply DNS settings.</strong><p className="muted-line">You will be asked to confirm because active VPN clients must reconnect.</p></div>
+        <div><strong>Save and apply DNS settings.</strong><p className="muted-line">VPN clients are reconnected automatically only when client-facing DNS parameters change.</p></div>
         <div className="toolbar">
           <ActionButton label="Save" icon={Save} primary busy={busy === "internal-dns-settings" || busy === "internal-dns-apply"} onClick={onSave} />
         </div>

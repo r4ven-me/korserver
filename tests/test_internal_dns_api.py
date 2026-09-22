@@ -69,6 +69,8 @@ def test_internal_dns_settings_enable_switches_client_dns(tmp_path: Path) -> Non
 
     assert response.status_code == 200
     payload = response.json()
+    assert payload["status"] == "saved_and_applied"
+    assert payload["reconnect_required"] is True
     assert payload["internal_dns"]["resolver_enabled"] is True
     assert payload["internal_dns"]["blocklist_enabled"] is True
     assert payload["internal_dns"]["effective_reasons"] == [
@@ -126,6 +128,33 @@ def test_internal_dns_settings_saves_cache_size_log_queries_and_local_records(
     assert saved["internal_dns"]["cache_size"] == 1000
     assert saved["internal_dns"]["log_queries"] is True
     assert saved["internal_dns"]["local_records"] == ["nas.corp.local 10.11.11.5"]
+
+
+def test_local_record_change_does_not_reconnect_clients(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(
+        config_path,
+        tmp_path,
+        extra="""
+internal_dns:
+  resolver_enabled: true
+""",
+    )
+
+    response = client.post(
+        "/api/internal-dns/settings",
+        auth=("admin", "secret"),
+        json={
+            "resolver_enabled": True,
+            "local_records_enabled": True,
+            "local_records": ["nas.corp.local 10.11.11.5"],
+        },
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["reconnect_required"] is False
+    assert payload["internal_dns"]["local_records"] == ["nas.corp.local 10.11.11.5"]
 
 
 def test_internal_dns_settings_rejects_bad_url(tmp_path: Path) -> None:

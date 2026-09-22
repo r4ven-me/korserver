@@ -194,7 +194,11 @@ async function mockApi(page: Page, options: MockOptions = {}) {
         log_queries: false,
         local_records: []
       },
-      "/api/internal-dns/settings": { status: "saved" },
+      "/api/internal-dns/settings": {
+        status: "saved_and_applied",
+        reconnect_required: false,
+        commands: []
+      },
       "/api/upstream/status": {
         enabled: options.upstreamEnabled ?? false,
         active_profile: null,
@@ -456,7 +460,6 @@ test("DNS Save persists one atomic draft and applies it", async ({ page }) => {
   await page.getByRole("tab", { name: "DNS forwarding", exact: true }).click();
   await page.getByLabel("DNS servers", { exact: true }).fill("1.1.1.1\n8.8.8.8");
   await page.getByLabel("Domains", { exact: true }).fill("example.com\nexample.net");
-  page.once("dialog", (dialog) => dialog.accept());
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect.poll(() => mutations.find((entry) => entry.path === "/api/internal-dns/settings"))
@@ -475,9 +478,7 @@ test("DNS Save persists one atomic draft and applies it", async ({ page }) => {
     public_domains: ["example.com", "example.net"]
   });
   await expect.poll(() => mutations.some((entry) => entry.path === "/api/internal-dns/apply"))
-    .toBe(true);
-  await expect(page.getByRole("button", { name: "Apply DNS changes (disconnects active clients)" }))
-    .toHaveCount(0);
+    .toBe(false);
 });
 
 test("server-side routing controls in Upstream settings are inert until Upstream is enabled", async ({

@@ -58,7 +58,10 @@ def internal_dns_blocklist(
 def save_internal_dns_settings(
     request: Request,
     payload: InternalDnsSettingsRequest,
+    background_tasks: BackgroundTasks,
 ) -> dict[str, object]:
+    previous_config: AppConfig = request.app.state.config
+    previous_client_dns = _client_dns_signature(previous_config)
     patch: dict[str, object] = {
         "server": {
             "dns": payload.server_dns,
@@ -82,11 +85,27 @@ def save_internal_dns_settings(
         },
     }
     loaded_config, written = apply_config_patch(request, patch)
+    reconnect_required = previous_client_dns != _client_dns_signature(loaded_config)
+    commands = _apply_dns_configuration(
+        loaded_config,
+        background_tasks,
+        reconnect_clients=reconnect_required,
+    )
     return {
-        "status": "saved",
+        "status": "saved_and_applied",
         "written": written,
+        "reconnect_required": reconnect_required,
+        "commands": [_command_payload(result) for result in commands],
         "internal_dns": InternalDnsService(loaded_config).status(),
     }
+
+
+def _client_dns_signature(config: AppConfig) -> tuple[tuple[str, ...], tuple[str, ...], bool]:
+    return (
+        tuple(config.client_dns_servers()),
+        tuple(config.server.search_domains),
+        config.dns_tunnel_active(),
+    )
 
 
 def _command_payload(result: CommandResult) -> dict[str, object]:
@@ -105,30 +124,41 @@ def _disconnect_dns_clients(config: AppConfig, usernames: tuple[str, ...]) -> No
         sessions.kick(username)
 
 
-@router.post("/apply")
-def apply_internal_dns(
-    request: Request,
+def _apply_dns_configuration(
+    config: AppConfig,
     background_tasks: BackgroundTasks,
-) -> list[dict[str, object]]:
-    """Apply DNS configuration, then reconnect clients after sending the response."""
-    config: AppConfig = request.app.state.config
+    *,
+    reconnect_clients: bool,
+) -> list[CommandResult]:
     from korserver.services.config import ConfigService
 
     ConfigService().write_rendered_files(config)
-    results = []
+    results: list[CommandResult] = []
     server = ServerService(config)
     if config.dns_tunnel_active():
         InternalDnsService(config).ensure_listen_address()
         results.append(server.process_action("restart", "dnsmasq"))
     else:
         results.append(server.process_action("stop", "dnsmasq"))
-    reload_result = server.reload()
-    results.append(reload_result)
-    if reload_result.ok:
-        sessions = SessionService(config)
-        usernames = tuple(dict.fromkeys(item.username for item in sessions.list_sessions()))
-        if usernames:
-            background_tasks.add_task(_disconnect_dns_clients, config, usernames)
+    if reconnect_clients:
+        reload_result = server.reload()
+        results.append(reload_result)
+        if reload_result.ok:
+            sessions = SessionService(config)
+            usernames = tuple(dict.fromkeys(item.username for item in sessions.list_sessions()))
+            if usernames:
+                background_tasks.add_task(_disconnect_dns_clients, config, usernames)
+    return results
+
+
+@router.post("/apply")
+def apply_internal_dns(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> list[dict[str, object]]:
+    """Explicitly apply DNS configuration and reconnect active clients."""
+    config: AppConfig = request.app.state.config
+    results = _apply_dns_configuration(config, background_tasks, reconnect_clients=True)
     return [_command_payload(result) for result in results]
 
 
