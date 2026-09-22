@@ -1504,8 +1504,13 @@ def test_status_reports_per_connection_details(tmp_path: Path) -> None:
     assert status.remote == "203.0.113.77"
     assert status.connections[0]["connected"] is True
     assert status.connections[0]["interface"] == "oc-middle0"
+    assert isinstance(status.connections[0]["connected_since"], str)
+    assert isinstance(status.connections[0]["connected_for_seconds"], int)
+    assert status.connections[0]["connected_for_seconds"] >= 0
     assert status.connections[1]["connected"] is False
     assert status.connections[1]["local_ip"] is None
+    assert status.connections[1]["connected_since"] is None
+    assert status.connections[1]["connected_for_seconds"] is None
 
 
 def test_upstream_lock_serializes_across_service_instances(tmp_path: Path) -> None:

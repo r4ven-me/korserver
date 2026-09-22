@@ -10,6 +10,7 @@ import signal
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 
 from korserver.config.models import AppConfig, UpstreamProfileConfig
@@ -180,6 +181,7 @@ class UpstreamService:
             connected = self._profile_connected(profile)
             local_ip = self._interface_address(interface) if connected else None
             remote = self._remote_address(profile) if connected else None
+            connected_since, connected_for_seconds = self._connection_age(profile)
             connections.append(
                 {
                     "profile": profile.name,
@@ -187,6 +189,8 @@ class UpstreamService:
                     "connected": connected,
                     "local_ip": local_ip,
                     "remote": remote,
+                    "connected_since": connected_since,
+                    "connected_for_seconds": connected_for_seconds,
                 }
             )
             if selected and profile.name == selected.name:
@@ -235,6 +239,28 @@ class UpstreamService:
     def _profile_connected(self, profile: UpstreamProfileConfig) -> bool:
         pid = self._read_pid(profile)
         return pid is not None and self._is_running(pid)
+
+    def _connection_age(self, profile: UpstreamProfileConfig) -> tuple[str | None, int | None]:
+        """Return the current OpenConnect process start time and age.
+
+        A reconnect that replaces the OpenConnect process resets both values,
+        making reconnects visible in the panel without maintaining separate
+        mutable state. Runtime environments without readable procfs simply
+        report no timing information.
+        """
+        pid = self._read_pid(profile)
+        if pid is None or not self._is_running(pid):
+            return None, None
+        try:
+            stat_fields = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()
+            start_ticks = int(stat_fields[21])
+            clock_ticks = int(os.sysconf("SC_CLK_TCK"))
+            system_uptime = float(Path("/proc/uptime").read_text(encoding="utf-8").split()[0])
+        except (OSError, ValueError, IndexError):
+            return None, None
+        age = max(0, int(system_uptime - (start_ticks / clock_ticks)))
+        started_at = datetime.fromtimestamp(time.time() - age, tz=UTC).isoformat()
+        return started_at, age
 
     def _interface_address(self, interface: str) -> str | None:
         result = self.runner.run(

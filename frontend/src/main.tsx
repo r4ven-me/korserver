@@ -1497,8 +1497,9 @@ function App() {
     if (result !== null) {
       const applied = await runAction(
         "internal-dns-apply",
-        "DNS settings saved and applied",
-        (token) => applyInternalDns(token)
+        "DNS settings saved and applied; active VPN clients are reconnecting",
+        (token) => applyInternalDns(token),
+        { reload: false }
       );
       recordCommand(
         "internal_dns",
@@ -1510,8 +1511,9 @@ function App() {
   const handleApplyInternalDns = async () => {
     const result = await runAction(
       "internal-dns-apply",
-      "DNS changes applied",
-      (token) => applyInternalDns(token)
+      "DNS changes applied; active VPN clients are reconnecting",
+      (token) => applyInternalDns(token),
+      { reload: false }
     );
     if (result !== null) recordCommand("internal_dns", result);
   };
@@ -5512,9 +5514,22 @@ function UpstreamView({
                     <Pill kind="muted">down</Pill>
                   )}
                   {profileConnected && (
-                    <span className="muted-line">
-                      {`Internal ${connection?.local_ip ?? "-"} / External ${connection?.remote ?? "-"}`}
-                    </span>
+                    <>
+                      <span className="muted-line">
+                        {`Internal ${connection?.local_ip ?? "-"} / External ${connection?.remote ?? "-"}`}
+                      </span>
+                      <span className="muted-line">
+                        {`Connected for ${formatDuration(connection?.connected_for_seconds ?? null)}`}
+                      </span>
+                      {connection?.connected_since && (
+                        <span
+                          className="muted-line"
+                          title="This timestamp resets when the OpenConnect process reconnects or restarts."
+                        >
+                          {`Since ${new Date(connection.connected_since).toLocaleString()}`}
+                        </span>
+                      )}
+                    </>
                   )}
                 </div>
               </td>

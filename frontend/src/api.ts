@@ -134,6 +134,8 @@ export type UpstreamConnection = {
   connected: boolean;
   local_ip: string | null;
   remote: string | null;
+  connected_since: string | null;
+  connected_for_seconds: number | null;
 };
 
 export type UpstreamStatus = {

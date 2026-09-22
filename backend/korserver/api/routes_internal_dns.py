@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
 from korserver.api.auth import require_admin
@@ -99,9 +99,18 @@ def _command_payload(result: CommandResult) -> dict[str, object]:
     }
 
 
+def _disconnect_dns_clients(config: AppConfig, usernames: tuple[str, ...]) -> None:
+    sessions = SessionService(config)
+    for username in usernames:
+        sessions.kick(username)
+
+
 @router.post("/apply")
-def apply_internal_dns(request: Request) -> list[dict[str, object]]:
-    """Apply saved DNS configuration and reconnect clients to receive it."""
+def apply_internal_dns(
+    request: Request,
+    background_tasks: BackgroundTasks,
+) -> list[dict[str, object]]:
+    """Apply DNS configuration, then reconnect clients after sending the response."""
     config: AppConfig = request.app.state.config
     from korserver.services.config import ConfigService
 
@@ -117,8 +126,9 @@ def apply_internal_dns(request: Request) -> list[dict[str, object]]:
     results.append(reload_result)
     if reload_result.ok:
         sessions = SessionService(config)
-        for username in dict.fromkeys(item.username for item in sessions.list_sessions()):
-            results.append(sessions.kick(username))
+        usernames = tuple(dict.fromkeys(item.username for item in sessions.list_sessions()))
+        if usernames:
+            background_tasks.add_task(_disconnect_dns_clients, config, usernames)
     return [_command_payload(result) for result in results]
 
 
