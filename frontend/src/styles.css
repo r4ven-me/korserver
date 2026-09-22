@@ -450,9 +450,25 @@ label span,
 .profile-routing-group {
   border-top: 1px solid var(--border);
   display: grid;
-  gap: 10px;
+  gap: 14px;
   grid-column: 1 / -1;
-  padding-top: 12px;
+  padding-top: 16px;
+}
+
+.profile-status-switches {
+  align-items: start;
+  border-top: 1px solid var(--border);
+  display: grid;
+  gap: 16px 24px;
+  grid-column: 1 / -1;
+  grid-template-columns: repeat(auto-fit, minmax(210px, max-content));
+  padding-top: 16px;
+}
+
+.profile-status-switches .switch {
+  align-items: flex-start;
+  margin: 0;
+  min-height: 38px;
 }
 
 .form-submit-right {
@@ -890,6 +906,23 @@ textarea:focus {
   max-width: 110px;
 }
 
+.renewal-interval-field {
+  align-self: end;
+}
+
+.renewal-interval-field .compact-field {
+  display: flex;
+}
+
+.field-help {
+  color: var(--muted);
+  display: block;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 7px;
+  max-width: 48ch;
+}
+
 .field-action input,
 .password-tools input,
 .p12-tools input {
@@ -1313,14 +1346,35 @@ textarea:focus {
 }
 
 .diagnostic-probe summary {
+  align-items: center;
   cursor: pointer;
-  font-weight: 750;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 34px;
 }
 
-.diagnostic-probe code {
+.diagnostic-probe-output {
+  display: grid;
+  gap: 12px;
+  padding: 12px 0 4px 20px;
+}
+
+.diagnostic-probe-output span {
+  color: var(--muted);
   display: block;
-  margin-top: 8px;
-  max-width: 420px;
+  font-size: 12px;
+  font-weight: 700;
+  margin-bottom: 5px;
+}
+
+.diagnostic-probe-output code,
+.diagnostic-probe-output pre {
+  display: block;
+  margin: 0;
+  max-height: 360px;
+  overflow: auto;
+  white-space: pre-wrap;
 }
 
 .nested-settings-details {
@@ -1990,6 +2044,12 @@ code {
      to blow the whole grid wider than the modal, causing it to scroll
      horizontally instead of wrapping other fields onto later rows. */
   grid-column: 1 / -1;
+}
+
+.cert-source-field > input,
+.cert-source-field > textarea,
+.cert-source-field > .file-picker {
+  width: 100%;
 }
 
 .cert-source-toggle {

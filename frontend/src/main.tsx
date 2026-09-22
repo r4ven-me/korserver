@@ -4839,6 +4839,7 @@ function InternalDnsView({
           <summary>Local records</summary>
           <textarea
             aria-label="Local records"
+            className="bulk-list-textarea"
             disabled={!resolverActive || !draft.localRecordsEnabled}
             rows={8}
             placeholder={"nas.corp.local 10.11.11.5\nprinter.corp.local 10.11.11.6"}
@@ -6330,6 +6331,7 @@ function UpstreamProfileDialog({
               </div>
             )}
           </div>
+          <div className="profile-status-switches">
           <label className="switch" title="Skip upstream certificate verification">
             <input
               checked={draft.trusted_cert}
@@ -6360,6 +6362,7 @@ function UpstreamProfileDialog({
             />
             <span>This profile enabled</span>
           </label>
+          </div>
           <div className="modal-actions">
             <button
               className="primary-button"
@@ -6490,6 +6493,7 @@ function CertificatesView({
           <label>
             <span>Mode</span>
             <select
+              aria-describedby="certificate-mode-help"
               value={certificateSettingsDraft.mode}
               onChange={(event) =>
                 onCertificateSettingsDraftChange({
@@ -6501,6 +6505,11 @@ function CertificatesView({
               <option value="auto">Auto (local CA)</option>
               <option value="external">External</option>
             </select>
+            <small className="field-help" id="certificate-mode-help">
+              {certificateSettingsDraft.mode === "auto"
+                ? "Auto uses the Korvus-managed local CA to generate and maintain certificates."
+                : "External uses a certificate and private key supplied by you; Korvus does not generate them."}
+            </small>
           </label>
           <label>
             <span>CA name</span>
@@ -6828,8 +6837,9 @@ function CertificatesView({
             />
             <span>Auto-renew</span>
           </label>
-          <label className="compact-field" title="How often certbot should check for renewal">
-            <span>Every</span>
+          <label className="renewal-interval-field" title="How often certbot should check for renewal">
+            <span>Renewal check interval</span>
+            <div className="compact-field">
             <input
               min={1}
               disabled={!leEnabled}
@@ -6857,6 +6867,7 @@ function CertificatesView({
               <option value="weeks">weeks</option>
               <option value="months">months</option>
             </select>
+            </div>
           </label>
         </div>
           <div className="panel-footer">
@@ -7577,20 +7588,18 @@ function DiagnosticsView({ diagnostics }: { diagnostics: DiagnosticResult | null
       <Table columns={["Probe", "Status", "Stdout", "Stderr"]} empty="No diagnostics">
         {Object.entries(diagnostics ?? {}).map(([name, result]) => (
           <tr key={name}>
-            <td>
+            <td colSpan={4}>
               <details className="diagnostic-probe">
-                <summary>{name}</summary>
-                <code>{result.argv.join(" ")}</code>
+                <summary>
+                  <strong>{name}</strong>
+                  <Pill kind={diagnosticKind(result)}>{result.returncode}</Pill>
+                </summary>
+                <div className="diagnostic-probe-output">
+                  <div><span>Command</span><code>{result.argv.join(" ")}</code></div>
+                  <div><span>Stdout</span><pre>{result.stdout || "—"}</pre></div>
+                  <div><span>Stderr</span><pre>{result.stderr || "—"}</pre></div>
+                </div>
               </details>
-            </td>
-            <td>
-              <Pill kind={diagnosticKind(result)}>{result.returncode}</Pill>
-            </td>
-            <td>
-              <code>{result.stdout}</code>
-            </td>
-            <td>
-              <code>{result.stderr}</code>
             </td>
           </tr>
         ))}
