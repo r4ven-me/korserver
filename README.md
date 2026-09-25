@@ -76,11 +76,13 @@ are applied directly to the host's netfilter in this mode (not an isolated names
 so the image's `nftables` userspace version (built on Debian) should match the host
 kernel - a Debian host avoids the issue entirely; and `korserver` only ever creates its
 own project-owned tables (prefixed with `routing.nft_prefix`, no global `flush
-ruleset`), so it doesn't touch unrelated host rules. The `devices:` list also maps
-`/dev/vhost-net` - an optional accelerated TUN path that `openconnect` (including the
-Upstream/middle-server outbound tunnel) can use if the host supports the `vhost_net`
-kernel module; if it's missing, `openconnect` silently falls back to a plain `tun`, only
-logging a harmless `Failed to open /dev/vhost-net`.
+ruleset`), so it doesn't touch unrelated host rules. The `devices:` list also has a
+commented-out `/dev/vhost-net` entry - an optional accelerated TUN path that `openconnect`
+(including the Upstream/middle-server outbound tunnel) can use if the host supports the
+`vhost_net` kernel module. It's off by default because Docker refuses to start a
+container whose listed device doesn't exist on the host; uncomment it only after
+checking `test -c /dev/vhost-net`. Without it, `openconnect` falls back to a plain
+`tun`, only logging a harmless `Failed to open /dev/vhost-net`.
 
 Check the status:
 

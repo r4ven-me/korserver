@@ -52,11 +52,10 @@ The compose file grants the minimum runtime capabilities needed for ocserv and n
 cap_add:
   - NET_ADMIN
   - NET_RAW
+network_mode: host
 devices:
   - /dev/net/tun:/dev/net/tun
-ports:
-  - "443:443/tcp"
-  - "443:443/udp"
+  # - /dev/vhost-net:/dev/vhost-net  # optional; only if it exists on the host
 env_file:
   - .env
 volumes:
