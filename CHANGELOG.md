@@ -2,6 +2,31 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Editing an upstream profile from the panel no longer moves it to the end of
+  `upstream.profiles`. Tunnel interfaces and fwmark/table offsets are derived from list
+  position, so a plain edit used to renumber live tunnels.
+- Saving a profile from the panel no longer drops an explicit `routing_offset`; the
+  field is now accepted by the API and editable in the profile editor ("Routing offset").
+- A missing system binary (`ip`, `certtool`, ...) is reported as a failed command
+  (exit 127) instead of an unhandled error, so status endpoints no longer return HTTP 500.
+- `compose.yaml` no longer maps `/dev/vhost-net` by default: Docker refuses to start the
+  container when that device is absent on the host. It stays available as a
+  commented-out line.
+
+### Changed
+
+- Frontend package version follows the project version; `vite` and
+  `@vitejs/plugin-react` moved to `devDependencies`.
+- Removed generated/stray files from the repository (`*.egg-info`, Playwright
+  `test-results/`, orphaned debug scripts).
+
+## [1.1.2] and earlier
+
+Entries below accumulated across the 1.0.x-1.1.x releases and were not split per
+version.
+
 ### Added
 
 - Independent host-traffic routing: `routing.host_traffic`/`routing.host_mode`
