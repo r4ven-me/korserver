@@ -1,0 +1,274 @@
+import { type FormEvent, useEffect, useState } from "react";
+import {
+  type UpstreamProfile,
+  type UpstreamProfileDraft,
+  connectUpstreamProfile,
+  deleteUpstreamProfile,
+  disconnectUpstreamProfile,
+  fetchUpstreamProfiles,
+  fetchUpstreamStatus,
+  saveUpstreamProfile,
+  saveUpstreamSettings,
+  setUpstreamProfileEnabled,
+  switchUpstream
+} from "../../api";
+import { confirmAction } from "../../lib/async";
+import { syntheticCommand } from "../../lib/commands";
+import { readBoolean, readNumber, readRecord } from "../../lib/read";
+import type { PanelCore } from "../core";
+import { emptyUpstreamProfileDraft, upstreamProfileToDraft } from "../state";
+import type { ConfigSection, Tab } from "../types";
+
+// `saveRoutingSettings` comes from useRouting(): the Upstream settings dialog
+// also holds the server-side routing controls and saves them together.
+export function useUpstream(
+  core: PanelCore,
+  tab: Tab,
+  configSection: ConfigSection,
+  saveRoutingSettings: () => Promise<void>
+) {
+  const { authInfo, authToken, dryRun, recordCommand, runAction, setState, state } = core;
+  const [upstreamDraft, setUpstreamDraft] =
+    useState<UpstreamProfileDraft>(emptyUpstreamProfileDraft);
+  // Fixed at the moment the dialog opens (create vs. edit an existing
+  // profile) -- must NOT be derived from draft.name, which changes on
+  // every keystroke and would flip a brand-new profile into "edit mode"
+  // (disabling the Name field, see UpstreamProfileDialog) after the very
+  // first character typed.
+  const [editingProfile, setEditingProfile] = useState(false);
+  // Bumped each time the dialog opens (create or edit) so
+  // UpstreamProfileDialog remounts with fresh local state (certMode,
+  // keyMode, ...) when switching targets, WITHOUT remounting -- and
+  // dropping input focus -- on every keystroke the way keying off the
+  // live-typed draft.name did.
+  const [profileDialogKey, setProfileDialogKey] = useState(0);
+  const [profileModalOpen, setProfileModalOpen] = useState(false);
+  const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  const [upstreamInterface, setUpstreamInterface] = useState("oc-middle0");
+  const [checkInterval, setCheckInterval] = useState(5);
+  const [checkThreshold, setCheckThreshold] = useState(3);
+  const [checkSettleSeconds, setCheckSettleSeconds] = useState(15);
+  const [failover, setFailover] = useState(false);
+  const [connectOnBoot, setConnectOnBoot] = useState(true);
+  const [checkHost, setCheckHost] = useState("");
+
+  core.registerHydrator("upstream", ({ config, upstream }) => {
+    if (config) {
+      const upstreamConfig = readRecord(config.upstream);
+      setCheckInterval(readNumber(upstreamConfig.check_interval, 5));
+      setCheckThreshold(readNumber(upstreamConfig.check_threshold, 3));
+      setCheckSettleSeconds(readNumber(upstreamConfig.check_settle_seconds, 15));
+      setFailover(readBoolean(upstreamConfig.failover, false));
+      setConnectOnBoot(readBoolean(upstreamConfig.connect_on_boot, true));
+    }
+    if (upstream) {
+      setUpstreamInterface(upstream.interface || "oc-middle0");
+    }
+  });
+
+  useEffect(() => {
+    if (tab !== "config" || configSection !== "upstream" || !authToken || !authInfo) {
+      return;
+    }
+    // The watchdog connects/reconnects in the background, so the
+    // Connected/Connection state changes without any panel action --
+    // keep it live while the section is open instead of showing whatever
+    // was true at login.
+    const refreshUpstream = () => {
+      Promise.all([fetchUpstreamStatus(authToken), fetchUpstreamProfiles(authToken)])
+        .then(([upstream, upstreamProfiles]) => {
+          setState((current) => ({ ...current, upstream, upstreamProfiles }));
+        })
+        .catch(() => {
+          // Transient polling failure: keep the last known state.
+        });
+    };
+    const interval = window.setInterval(refreshUpstream, 5000);
+    return () => window.clearInterval(interval);
+  }, [authInfo, authToken, configSection, setState, tab]);
+
+  const activeProfile = () =>
+    state.upstreamProfiles.find((profile) => profile.name === state.upstream?.active_profile);
+
+  const saveSettings = async (enabled: boolean) => {
+    const result = await runAction(
+      "upstream-settings",
+      `Upstream ${enabled ? "enabled" : "disabled"}`,
+      (token) =>
+        saveUpstreamSettings(token, {
+          enabled,
+          interface: upstreamInterface,
+          active_profile: state.upstream?.active_profile ?? state.upstreamProfiles[0]?.name ?? null,
+          check_interval: checkInterval,
+          check_threshold: checkThreshold,
+          check_settle_seconds: checkSettleSeconds,
+          failover,
+          connect_on_boot: connectOnBoot
+        })
+    );
+    if (result !== null) {
+      recordCommand("upstream", syntheticCommand(["korctl", "upstream", "settings"], "saved"));
+    }
+  };
+
+  const saveCheckHost = async () => {
+    const active = activeProfile();
+    if (!active) {
+      return;
+    }
+    const draft: UpstreamProfileDraft = {
+      ...upstreamProfileToDraft(active, Boolean(state.upstream?.enabled)),
+      check_host: checkHost
+    };
+    const result = await runAction("upstream-settings", "Check host saved", (token) =>
+      saveUpstreamProfile(token, draft)
+    );
+    if (result !== null) {
+      recordCommand("upstream", syntheticCommand(["korctl", "upstream", "profile"], "saved"));
+    }
+  };
+
+  const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const result = await runAction("upstream-profile", "Upstream profile saved", (token) =>
+      saveUpstreamProfile(token, upstreamDraft)
+    );
+    if (result !== null) {
+      recordCommand("upstream", syntheticCommand(["korctl", "upstream", "profile"], "saved"));
+      setProfileModalOpen(false);
+    }
+  };
+
+  const deleteProfile = async (name: string) => {
+    if (!confirmAction(`Delete upstream profile ${name}?`)) {
+      return;
+    }
+    const result = await runAction(
+      `upstream-profile-delete-${name}`,
+      `Upstream profile ${name} deleted`,
+      (token) => deleteUpstreamProfile(token, name)
+    );
+    if (result !== null) {
+      recordCommand(
+        "upstream",
+        syntheticCommand(["korctl", "upstream", "profile", "delete", name], "deleted")
+      );
+    }
+  };
+
+  const setProfileEnabled = async (name: string, enabled: boolean) => {
+    const result = await runAction(
+      `upstream-profile-enabled-${name}`,
+      `Upstream profile ${name} ${enabled ? "enabled" : "disabled"}`,
+      (token) => setUpstreamProfileEnabled(token, name, enabled)
+    );
+    if (result !== null) {
+      recordCommand(
+        "upstream",
+        syntheticCommand(
+          ["korctl", "upstream", enabled ? "enable" : "disable", name],
+          enabled ? "enabled" : "disabled"
+        )
+      );
+    }
+  };
+
+  const switchProfile = (profile: string) => {
+    const current = state.upstream?.active_profile;
+    if (
+      current &&
+      current !== profile &&
+      !confirmAction(
+        `Make "${profile}" the default profile? Client/host traffic currently ` +
+          `redirected via "${current}" will re-point to "${profile}" -- ` +
+          "existing connections stay up."
+      )
+    ) {
+      return;
+    }
+    void runAction(`switch-${profile}`, `Upstream profile ${profile} selected`, (token) =>
+      switchUpstream(token, profile)
+    );
+  };
+
+  const openProfileDialog = (draft: UpstreamProfileDraft, isEdit: boolean) => {
+    setUpstreamDraft(draft);
+    setEditingProfile(isEdit);
+    setProfileDialogKey((key) => key + 1);
+    setProfileModalOpen(true);
+  };
+
+  const createProfile = () => openProfileDialog(emptyUpstreamProfileDraft, false);
+
+  const editProfile = (profile: UpstreamProfile) =>
+    openProfileDialog(upstreamProfileToDraft(profile, Boolean(state.upstream?.enabled)), true);
+
+  const connectProfile = async (name: string) => {
+    const result = await runAction(
+      `upstream-profile-connect-${name}`,
+      `Profile ${name} connected`,
+      (token) => connectUpstreamProfile(token, name, dryRun),
+      { dryRunAware: true }
+    );
+    recordCommand("upstream", result);
+  };
+
+  const disconnectProfile = async (name: string) => {
+    const result = await runAction(
+      `upstream-profile-disconnect-${name}`,
+      `Profile ${name} disconnected`,
+      (token) => disconnectUpstreamProfile(token, name, dryRun),
+      { dryRunAware: true }
+    );
+    recordCommand("upstream", result);
+  };
+
+  const openSettings = () => {
+    setCheckHost(activeProfile()?.check_host ?? "");
+    setSettingsModalOpen(true);
+  };
+
+  const submitSettings = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    await saveSettings(Boolean(state.upstream?.enabled));
+    await saveCheckHost();
+    await saveRoutingSettings();
+    setSettingsModalOpen(false);
+  };
+
+  return {
+    upstreamDraft,
+    setUpstreamDraft,
+    editingProfile,
+    profileDialogKey,
+    profileModalOpen,
+    closeProfileDialog: () => setProfileModalOpen(false),
+    settingsModalOpen,
+    closeSettings: () => setSettingsModalOpen(false),
+    upstreamInterface,
+    setUpstreamInterface,
+    checkInterval,
+    setCheckInterval,
+    checkThreshold,
+    setCheckThreshold,
+    checkSettleSeconds,
+    setCheckSettleSeconds,
+    failover,
+    setFailover,
+    connectOnBoot,
+    setConnectOnBoot,
+    checkHost,
+    setCheckHost,
+    saveSettings,
+    saveProfile,
+    deleteProfile,
+    setProfileEnabled,
+    switchProfile,
+    createProfile,
+    editProfile,
+    connectProfile,
+    disconnectProfile,
+    openSettings,
+    submitSettings
+  };
+}

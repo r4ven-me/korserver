@@ -124,11 +124,19 @@ korserver/
 
 `frontend/src/` is split by role; `main.tsx` only mounts `<App />`.
 
-- `App.tsx` — the root component: all panel state, data loading and action handlers
-  (`runAction`), plus the tab/section switch that wires state into the views.
+- `App.tsx` — the root component: tab/section navigation, the page shell, and the wiring
+  of feature-hook state and actions into the views. It holds no feature logic itself.
+- `app/core.ts` — `usePanelCore()`: auth, the loaded `AppState`, busy/notice handling,
+  the "last command" outputs, `loadAll()` and `runAction()` (the wrapper every mutation goes
+  through for consistent busy state, notices, dry-run labelling and auth-error logout).
+- `app/hooks/` — one hook per panel area (`useUsers`, `useGroups`, `useSessions`,
+  `useDashboard`, `useRouting`, `useInternalDns`, `useIdentity`, `useUpstream`,
+  `useCertificates`, `useSettings`, `useConfigEditor`, `useLogs`, `useLogin`, `useTheme`).
+  Each owns its drafts, dialogs and action handlers. A hook that keeps editable drafts
+  copies fresh server values into them with `core.registerHydrator()`, which `loadAll()`
+  calls right after every load.
+- `app/types.ts`, `app/state.ts` — shared app-level types and initial state/draft values.
 - `api.ts` — typed API client (request/response types and one function per endpoint).
-- `app/types.ts`, `app/state.ts` — shared app-level types (`Tab`, `AppState`, modal
-  states) and initial state/draft values.
 - `views/` — one component per tab or config section; larger areas get their own folder
   with their dialogs (`views/users/`, `views/groups/`, `views/upstream/`,
   `views/certificates/`, `views/config/`).
@@ -137,7 +145,7 @@ korserver/
 - `lib/` — pure helpers without React state: config→draft readers (`drafts.ts`,
   `read.ts`), formatting, log grouping, user-config normalization, error helpers.
 
-Views receive state and callbacks as props and leave API calls to `App.tsx`; the one
+Views receive state and callbacks as props and leave API calls to the hooks; the one
 exception is `views/config/AdminTotpPanel.tsx`, which runs its own two-factor
 setup/confirm/disable flow.
 
@@ -357,10 +365,11 @@ When a new field is added to `AppConfig`, add its GUI control in the same change
   — every settings-save endpoint in the codebase already goes through this one helper
   (`deep_merge` into the YAML, re-validate, write, optionally re-render). Don't invent a second
   mechanism.
-- Frontend: add a draft `useState` initialized from the loaded config (see the `read*Draft`
+- Frontend: add a draft `useState` to the area's hook in `frontend/src/app/hooks/`,
+  hydrated from the loaded config via `core.registerHydrator()` (see the `read*Draft`
   helpers in `frontend/src/lib/drafts.ts`, e.g. `readServerSettingsDraft`), a bound
   input/checkbox/select in the relevant view under `frontend/src/views/`, and a save handler
-  in `frontend/src/App.tsx` that calls the new endpoint through
+  in the same hook that calls the new endpoint through
   `runAction` (for consistent busy-state/notice/error handling).
 
 Exceptions that intentionally stay YAML-only, because a form control would be actively
