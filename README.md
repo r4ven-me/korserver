@@ -188,6 +188,21 @@ make frontend-build
 make frontend-audit
 ```
 
+### Releasing an image
+
+GitHub Actions publishes the runtime image to GHCR automatically:
+
+1. bump `version` in `pyproject.toml` and push it to `main` (directly or via a PR);
+2. the `CI` workflow runs on that commit;
+3. once CI passes, the `Release image` workflow (`.github/workflows/release-image.yml`)
+   checks whether `ghcr.io/r4ven-me/korserver:v<version>` already exists. If it doesn't,
+   the workflow builds the image and pushes it as `v<version>` and `latest`.
+
+Pushes that don't change the version find the tag already published and skip the build.
+The workflow can also be started by hand from the Actions tab ("Run workflow"). If the
+`OCSERV_SHA256` repository variable is set, the build verifies the ocserv source tarball
+against it.
+
 ## Configuration
 
 The main file is YAML:
