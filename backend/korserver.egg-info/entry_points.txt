@@ -1,3 +1,0 @@
-[console_scripts]
-korctl = korserver.cli:app
-korserver = korserver.main:run
