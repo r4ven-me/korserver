@@ -53,6 +53,29 @@ class CommandRunner:
             stderr=mask_text(stderr, secrets),
         )
 
+    def _spawn_error_result(
+        self,
+        exc: OSError,
+        *,
+        masked_argv: tuple[str, ...],
+        secrets: Sequence[str],
+        check: bool,
+    ) -> CommandResult:
+        # A missing/non-executable binary is reported like a shell would
+        # (exit 127) instead of leaking a raw OSError: check=False callers
+        # (status probes, best-effort cleanup) rely on getting a result back
+        # rather than an exception that surfaces as an HTTP 500.
+        reason = exc.strerror or exc.__class__.__name__
+        result = CommandResult(
+            argv=masked_argv,
+            returncode=127,
+            stdout="",
+            stderr=mask_text(f"{masked_argv[0]}: {reason}", secrets),
+        )
+        if check:
+            raise CommandError(result) from exc
+        return result
+
     def run(
         self,
         argv: Sequence[str],
@@ -117,6 +140,10 @@ class CommandRunner:
                 shell=False,
                 check=False,
             )
+        except OSError as exc:
+            return self._spawn_error_result(
+                exc, masked_argv=masked_argv, secrets=secrets, check=check
+            )
         except subprocess.TimeoutExpired as exc:
             result = self._timeout_result(
                 exc,
@@ -177,15 +204,20 @@ class CommandRunner:
         with output_file.open("a", encoding="utf-8") as log:
             log.write(f"--- {' '.join(masked_argv)} ---\n")
             log.flush()
-            process = subprocess.Popen(  # noqa: S603 - argv validated above, shell=False
-                list(argv),
-                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                text=True,
-                cwd=cwd,
-                env=dict(env) if env is not None else None,
-            )
+            try:
+                process = subprocess.Popen(  # noqa: S603 - argv validated above, shell=False
+                    list(argv),
+                    stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    cwd=cwd,
+                    env=dict(env) if env is not None else None,
+                )
+            except OSError as exc:
+                return self._spawn_error_result(
+                    exc, masked_argv=masked_argv, secrets=secrets, check=check
+                )
             if process.stdin is not None:
                 process.stdin.write(input_text or "")
                 process.stdin.close()
@@ -252,15 +284,20 @@ class CommandRunner:
         /etc/resolv.conf, so an unconditional kill leaves it in a
         half-modified state that breaks every later connection attempt.
         """
-        process = subprocess.Popen(  # noqa: S603 - argv validated above, shell=False
-            list(argv),
-            stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            cwd=cwd,
-            env=dict(env) if env is not None else None,
-        )
+        try:
+            process = subprocess.Popen(  # noqa: S603 - argv validated above, shell=False
+                list(argv),
+                stdin=subprocess.PIPE if input_text is not None else subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                cwd=cwd,
+                env=dict(env) if env is not None else None,
+            )
+        except OSError as exc:
+            return self._spawn_error_result(
+                exc, masked_argv=masked_argv, secrets=secrets, check=check
+            )
         try:
             stdout, stderr = process.communicate(input=input_text, timeout=timeout)
         except subprocess.TimeoutExpired:

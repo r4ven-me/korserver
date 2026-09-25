@@ -17,7 +17,10 @@ class FakeRunner:
         del timeout, check
         if tuple(argv) == ("ocserv", "--version"):
             return CommandResult(tuple(argv), 0, "ocserv 1.4.2\n", "")
-        return CommandResult(tuple(argv), 127, "", "missing")
+        if tuple(argv) == ("dnsmasq", "--version"):
+            return CommandResult(tuple(argv), 1, "", "dnsmasq: failed to start")
+        # CommandRunner reports a binary that isn't installed as exit 127.
+        return CommandResult(tuple(argv), 127, "", f"{argv[0]}: No such file or directory")
 
 
 def test_first_meaningful_line_normalizes_whitespace() -> None:
@@ -34,3 +37,5 @@ def test_collect_includes_distribution_and_command_status(tmp_path: Path) -> Non
     assert rows["Distribution"].version == "Debian GNU/Linux 13 (trixie)"
     assert rows["ocserv"].version == "ocserv 1.4.2"
     assert rows["dnsmasq"].status == "warning"
+    assert rows["qrencode"].status == "missing"
+    assert rows["qrencode"].version == "not available"

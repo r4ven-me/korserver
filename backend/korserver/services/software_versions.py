@@ -79,9 +79,9 @@ class SoftwareVersionService:
         return values
 
     def _command_version(self, name: str, argv: tuple[str, ...]) -> SoftwareVersion:
-        try:
-            result = self.runner.run(argv, timeout=10, check=False)
-        except OSError:
+        result = self.runner.run(argv, timeout=10, check=False)
+        if result.returncode == 127:
+            # Binary not installed (CommandRunner reports that as exit 127).
             return SoftwareVersion(name, "not available", argv, "missing")
         output = "\n".join(part for part in [result.stdout, result.stderr] if part).strip()
         if result.returncode != 0 and not output:

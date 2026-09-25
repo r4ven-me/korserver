@@ -91,6 +91,12 @@ FROM python:3.12-slim-trixie AS backend-test
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
 
+# gnutls-bin: the certificate tests that need a real certtool run here
+# instead of being skipped.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gnutls-bin \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /opt/korserver
 COPY pyproject.toml README.md ./
 COPY backend ./backend
