@@ -93,6 +93,7 @@ export type UpstreamProfile = {
   route_host_enabled?: boolean;
   host_routes?: string[];
   host_domains?: string[];
+  routing_offset?: number | null;
   enabled: boolean;
 };
 
@@ -124,6 +125,9 @@ export type UpstreamProfileDraft = {
   route_host_enabled: boolean;
   host_routes: string;
   host_domains: string;
+  // Explicit fwmark/table_id offset override; blank derives it from the
+  // profile's position in upstream.profiles.
+  routing_offset: string;
   enable: boolean;
   enabled: boolean;
 };
@@ -1196,7 +1200,8 @@ export function saveUpstreamProfile(
       host_domains: payload.host_domains
         .split(/[\n,]+/)
         .map((item) => item.trim())
-        .filter(Boolean)
+        .filter(Boolean),
+      routing_offset: payload.routing_offset.trim() ? Number(payload.routing_offset) : null
     })
   });
 }

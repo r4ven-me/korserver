@@ -8,6 +8,25 @@ from fastapi.testclient import TestClient
 
 from korserver.api.app import create_app
 from korserver.services import internal_dns
+from korserver.services.command import CommandResult
+
+
+@pytest.fixture(autouse=True)
+def _no_real_loopback_changes(monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    # Enabling the DNS tunnel runs `ip addr replace <listen>/32 dev lo`; under
+    # root on a dev box that would really add the address to the host's lo.
+    calls: list[str] = []
+
+    def fake_ensure_listen_address(
+        self: internal_dns.InternalDnsService, *, dry_run: bool = False
+    ) -> CommandResult:
+        calls.append(self.config.internal_dns.listen)
+        return CommandResult(("ip", "addr", "replace"), 0, "", "", dry_run=dry_run)
+
+    monkeypatch.setattr(
+        internal_dns.InternalDnsService, "ensure_listen_address", fake_ensure_listen_address
+    )
+    return calls
 
 
 def _client(config_path: Path, tmp_path: Path, extra: str = "") -> TestClient:

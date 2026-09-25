@@ -3,11 +3,15 @@
 ARG DEBIAN_VERSION=13
 ARG DEBIAN_CODENAME=trixie
 ARG OCSERV_VERSION=1.5.0
+# SHA-256 of ocserv-${OCSERV_VERSION}.tar.xz. When set, the build refuses a
+# tarball that doesn't match; update it together with OCSERV_VERSION.
+ARG OCSERV_SHA256=
 
 FROM debian:${DEBIAN_VERSION}-slim AS ocserv-builder
 
 ARG DEBIAN_CODENAME
 ARG OCSERV_VERSION
+ARG OCSERV_SHA256
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-Eeuo", "pipefail", "-c"]
@@ -67,6 +71,12 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
       yajl-tools \
     && curl -fL "https://www.infradead.org/ocserv/download/ocserv-${OCSERV_VERSION}.tar.xz" \
       -o "/tmp/ocserv-${OCSERV_VERSION}.tar.xz" \
+    && if [ -n "${OCSERV_SHA256}" ]; then \
+         echo "${OCSERV_SHA256}  /tmp/ocserv-${OCSERV_VERSION}.tar.xz" | sha256sum -c -; \
+       else \
+         echo "WARNING: OCSERV_SHA256 is not set; ocserv tarball integrity not verified" >&2; \
+         sha256sum "/tmp/ocserv-${OCSERV_VERSION}.tar.xz"; \
+       fi \
     && tar -C /tmp -xf "/tmp/ocserv-${OCSERV_VERSION}.tar.xz" \
     && cd "/tmp/ocserv-${OCSERV_VERSION}" \
     && meson setup build -Doidc-auth=enabled \
@@ -90,6 +100,12 @@ FROM python:3.12-slim-trixie AS backend-test
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1
+
+# gnutls-bin: the certificate tests that need a real certtool run here
+# instead of being skipped.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends gnutls-bin \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /opt/korserver
 COPY pyproject.toml README.md ./

@@ -187,3 +187,41 @@ def test_output_file_kills_process_that_ignores_sigterm(tmp_path: Path) -> None:
 
     assert result.returncode == 124
     assert "command timed out after 1 seconds" in log_file.read_text(encoding="utf-8")
+
+
+MISSING_BINARY = "korserver-test-binary-that-does-not-exist"
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [{}, {"graceful_timeout": 1.0}, {"output_file": "log"}],
+    ids=["plain", "graceful", "output_file"],
+)
+def test_missing_binary_returns_failed_result_when_unchecked(
+    tmp_path: Path, kwargs: dict[str, Any]
+) -> None:
+    # Status probes call e.g. `ip` with check=False and expect a failed
+    # result back, not a raw FileNotFoundError that surfaces as HTTP 500.
+    if "output_file" in kwargs:
+        kwargs = {"output_file": tmp_path / "out.log"}
+
+    result = CommandRunner().run([MISSING_BINARY, "--flag"], check=False, **kwargs)
+
+    assert result.returncode == 127
+    assert not result.ok
+    assert MISSING_BINARY in result.stderr
+
+
+def test_missing_binary_raises_command_error_when_checked() -> None:
+    with pytest.raises(CommandError) as excinfo:
+        CommandRunner().run([MISSING_BINARY])
+
+    assert excinfo.value.result.returncode == 127
+
+
+def test_missing_binary_masks_secrets_in_argv() -> None:
+    result = CommandRunner(secrets=["hunter2"]).run(
+        [MISSING_BINARY, "--password=hunter2"], check=False
+    )
+
+    assert "hunter2" not in " ".join(result.argv)

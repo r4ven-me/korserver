@@ -77,6 +77,10 @@ class UpstreamProfileRequest(BaseModel):
     # which is the *global* upstream.enabled toggle set when saving any
     # profile from the create/edit form.
     enabled: bool = True
+    # Explicit fwmark/table_id offset override (UpstreamProfileConfig.
+    # routing_offset). Omitted from the request -> an existing profile keeps
+    # its saved value; an explicit null clears it back to position-derived.
+    routing_offset: int | None = None
     enable: bool = True
 
 
@@ -161,9 +165,19 @@ def save_profile(
         _preserve_unset_secret(data, existing, "camouflage_secret")
         _preserve_unset_file_field(data, existing, "cert_file", "cert_file_base64")
         _preserve_unset_file_field(data, existing, "key_file", "key_file_base64")
+        for field in ("interface", "routing_offset"):
+            if field not in payload.model_fields_set and getattr(existing, field) is not None:
+                data[field] = getattr(existing, field)
     profile = UpstreamProfileConfig.model_validate(data)
-    profiles = [item for item in config.upstream.profiles if item.name != profile.name]
-    profiles.append(profile)
+    # Edit in place: a profile's tunnel interface and fwmark/table_id offset
+    # are derived from its position in upstream.profiles (see
+    # UpstreamConfig.profile_interface()/profile_routing_offset()), so moving
+    # an edited profile to the end would silently renumber live tunnels.
+    profiles = [
+        profile if item.name == profile.name else item for item in config.upstream.profiles
+    ]
+    if existing is None:
+        profiles.append(profile)
     patch: dict[str, object] = {
         "profiles": [item.model_dump(mode="json") for item in profiles],
         "enabled": payload.enable,

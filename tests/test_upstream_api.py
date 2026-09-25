@@ -605,3 +605,119 @@ def test_editing_an_existing_profile_does_not_change_the_active_one(tmp_path: Pa
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert saved["upstream"]["active_profile"] == "primary"
     assert saved["upstream"]["profiles"][1]["routes"] == ["10.50.0.0/16"]
+
+
+def _two_profile_client(config_path: Path, tmp_path: Path) -> TestClient:
+    config_path.write_text(
+        f"""
+system:
+  data_dir: {tmp_path}/data
+  log_dir: {tmp_path}/logs
+  generated_dir: {tmp_path}/generated
+  secrets_dir: {tmp_path}/secrets
+web:
+  enabled: true
+  admin_password: secret
+upstream:
+  active_profile: first
+  profiles:
+    - name: first
+      server: first.example.com
+      username: user
+      password: secret
+      routing_offset: 7
+    - name: second
+      server: second.example.com
+      username: user
+      password: secret
+""",
+        encoding="utf-8",
+    )
+    return TestClient(create_app(config_path=config_path))
+
+
+def test_editing_a_profile_keeps_its_position_in_the_list(tmp_path: Path) -> None:
+    # Tunnel interface and fwmark/table offsets are derived from list
+    # position, so an edit must not move the profile to the end.
+    config_path = tmp_path / "config.yaml"
+    client = _two_profile_client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={"name": "first", "server": "new.example.com", "username": "user"},
+    )
+
+    assert response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    profiles = saved["upstream"]["profiles"]
+    assert [item["name"] for item in profiles] == ["first", "second"]
+    assert profiles[0]["server"] == "new.example.com"
+
+
+def test_editing_a_profile_without_routing_offset_preserves_it(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _two_profile_client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={"name": "first", "server": "first.example.com", "username": "user"},
+    )
+
+    assert response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["profiles"][0]["routing_offset"] == 7
+
+
+def test_profile_routing_offset_can_be_set_and_cleared(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _two_profile_client(config_path, tmp_path)
+
+    set_response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "second",
+            "server": "second.example.com",
+            "username": "user",
+            "routing_offset": 9,
+        },
+    )
+    assert set_response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["profiles"][1]["routing_offset"] == 9
+
+    clear_response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "second",
+            "server": "second.example.com",
+            "username": "user",
+            "routing_offset": None,
+        },
+    )
+    assert clear_response.status_code == 200
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["profiles"][1]["routing_offset"] is None
+
+
+def test_profile_routing_offset_rejects_collisions(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _two_profile_client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "second",
+            "server": "second.example.com",
+            "username": "user",
+            "routing_offset": 7,
+        },
+    )
+
+    assert response.status_code >= 400
+    saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    assert saved["upstream"]["profiles"][1].get("routing_offset") is None

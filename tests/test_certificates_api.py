@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -151,6 +153,10 @@ def test_list_revoked_certificates_empty_by_default(tmp_path: Path) -> None:
     assert response.json() == {"certificates": []}
 
 
+@pytest.mark.skipif(
+    shutil.which("certtool") is None,
+    reason="needs GnuTLS certtool (gnutls-bin) to build a real CA and CRL",
+)
 def test_list_revoked_certificates_after_revoke(tmp_path: Path) -> None:
     client = _client(tmp_path / "config.yaml", tmp_path)
     regenerate = client.post(

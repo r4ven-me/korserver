@@ -16,7 +16,10 @@ services:
     network_mode: host
     devices:
       - /dev/net/tun:/dev/net/tun
-      - /dev/vhost-net:/dev/vhost-net
+      # Optional accelerated TUN path for openconnect. Docker refuses to start
+      # the container if a listed device is missing on the host, so enable it
+      # only when /dev/vhost-net exists (`modprobe vhost_net`).
+      # - /dev/vhost-net:/dev/vhost-net
     volumes:
       - ./config:/etc/korserver
       - ./data:/var/lib/korserver
