@@ -433,6 +433,7 @@ const emptyUpstreamProfileDraft: UpstreamProfileDraft = {
   route_host_enabled: false,
   host_routes: "",
   host_domains: "",
+  routing_offset: "",
   enable: false,
   enabled: false
 };
@@ -466,6 +467,7 @@ function upstreamProfileToDraft(
     route_host_enabled: profile.route_host_enabled ?? false,
     host_routes: listText(profile.host_routes ?? []),
     host_domains: listText(profile.host_domains ?? []),
+    routing_offset: profile.routing_offset != null ? String(profile.routing_offset) : "",
     // Reflects the ACTUAL current upstream.enabled, not a hardcoded true --
     // editing a profile while upstream is deliberately disabled must not
     // silently re-enable it just because this checkbox defaulted on.
@@ -6113,6 +6115,17 @@ function UpstreamProfileDialog({
             <input
               value={draft.interface}
               onChange={(event) => onDraftChange({ ...draft, interface: event.target.value })}
+              placeholder="auto"
+            />
+          </label>
+          <label title="fwmark/table id offset for this profile's own client/host routes, added to the routing fwmark/table id. Leave empty to derive it from the profile's position in the list; each profile needs a distinct value.">
+            <span>Routing offset</span>
+            <input
+              type="number"
+              min={1}
+              step={1}
+              value={draft.routing_offset}
+              onChange={(event) => onDraftChange({ ...draft, routing_offset: event.target.value })}
               placeholder="auto"
             />
           </label>

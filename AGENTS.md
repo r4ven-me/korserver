@@ -59,7 +59,8 @@ Before coding, read and extract behavior from:
     `system.data_dir`, `system.log_dir`, `system.generated_dir`, `system.secrets_dir`,
     `identity.config_per_group_dir`, `identity.config_per_user_dir`,
     `web.tls_cert`, `web.tls_key`, `web.static_dir`,
-    `routing.split.routes_file`, `routing.split.domains_file` (internal generated-state
+    `routing.split.routes_file`, `routing.split.domains_file`,
+    `routing.host_split.routes_file`, `routing.host_split.domains_file` (internal generated-state
     paths, the same category as the others above — not something an admin edits day to
     day; the runtime *contents* of these files are what the Upstream tab's route/domain
     list actually edits);

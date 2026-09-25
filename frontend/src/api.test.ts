@@ -88,6 +88,7 @@ const upstreamProfileDraft: UpstreamProfileDraft = {
   route_host_enabled: false,
   host_routes: "",
   host_domains: "",
+  routing_offset: "",
   enable: true,
   enabled: true
 };
@@ -177,6 +178,24 @@ describe("saveUpstreamProfile", () => {
     const sent = JSON.parse(String(init.body));
     expect(sent.host_routes).toEqual(["10.90.0.0/16", "10.91.0.0/16"]);
     expect(sent.host_domains).toEqual(["finance-internal.corp"]);
+  });
+
+  it("sends routing_offset as a number, or null when left blank", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ status: "saved" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveUpstreamProfile("session", { ...upstreamProfileDraft, routing_offset: "5" });
+    await saveUpstreamProfile("session", { ...upstreamProfileDraft, routing_offset: " " });
+
+    const sent = fetchMock.mock.calls.map(([, init]) => JSON.parse(String((init as RequestInit).body)));
+    expect(sent[0].routing_offset).toBe(5);
+    expect(sent[1].routing_offset).toBeNull();
   });
 
   it("sends an empty array, not a list with a blank string, for an empty textarea", async () => {
