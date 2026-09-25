@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "korserver"
-version = "1.1.2"
+version = "1.2.0"
 description = "Korvus Server OpenConnect/ocserv VPN management platform"
 readme = "README.md"
 requires-python = ">=3.12"
