@@ -2203,3 +2203,12 @@ label .icon-button span {
   font-weight: inherit;
   margin-bottom: 0;
 }
+
+.field-full-width {
+  grid-column: 1 / -1;
+}
+
+.field-full-width .field-help {
+  max-width: none;
+  margin: 6px 0 0;
+}

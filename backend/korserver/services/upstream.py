@@ -421,12 +421,33 @@ class UpstreamService:
                     ),
                 )
             ) from exc
-        self._append_log(
-            f"profile '{profile.name}': certificate check disabled, accepting the "
-            f"certificate the server presented ({pin}); set server_cert_pin to it "
-            "to stop trusting whatever the server presents"
-        )
+        previous = self._read_accepted_pin(profile)
+        if previous and previous != pin:
+            self._append_log(
+                f"WARNING profile '{profile.name}': the server now presents a different "
+                f"key ({previous} -> {pin}); accepted automatically because the "
+                "certificate check is disabled. Expected after a key rotation on the "
+                "upstream; otherwise it may be a man-in-the-middle."
+            )
+        elif previous is None:
+            self._append_log(
+                f"profile '{profile.name}': certificate check disabled, accepting the "
+                f"certificate the server presented ({pin}); set server_cert_pin to it "
+                "to stop trusting whatever the server presents"
+            )
+        self.files.atomic_write_text(self._accepted_pin_file(profile), f"{pin}\n")
         return pin
+
+    def _accepted_pin_file(self, profile: UpstreamProfileConfig) -> Path:
+        # Last pin accepted for a trusted_cert profile, to notice key changes.
+        safe_name = re.sub(r"[^A-Za-z0-9._-]", "_", profile.name)
+        return self.config.system.generated_dir / f"upstream-{safe_name}.accepted-pin"
+
+    def _read_accepted_pin(self, profile: UpstreamProfileConfig) -> str | None:
+        try:
+            return self._accepted_pin_file(profile).read_text(encoding="utf-8").strip() or None
+        except OSError:
+            return None
 
     def _ensure_vpnc_script(self) -> Path:
         """Install the interface-only vpnc-script into generated_dir.

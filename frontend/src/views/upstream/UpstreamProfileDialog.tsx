@@ -203,7 +203,7 @@ export function UpstreamProfileDialog({
             </>
           )}
           <div
-            className="field-label"
+            className="field-label field-full-width"
             title="Trust exactly this server certificate (openconnect --servercert). Needed when the upstream's certificate isn't signed by a public CA, e.g. another Korvus Server with its own CA."
           >
             <span id="upstream-server-cert-pin-label">Server cert pin</span>
@@ -225,6 +225,13 @@ export function UpstreamProfileDialog({
                 onClick={onFetchPin}
               />
             </div>
+            <p className="field-help">
+              The pin follows the server's key, not the certificate, so renewals that keep
+              the key (Korvus Server does, including Let's Encrypt) don't break it. To have
+              no pin to maintain at all, leave this empty and enable "No cert check": the
+              current certificate is then accepted automatically on every connect (a key
+              change is only logged).
+            </p>
           </div>
           <label title="Optional: only if the upstream ocserv server has camouflage enabled">
             <span>Camouflage secret</span>
@@ -313,7 +320,7 @@ export function UpstreamProfileDialog({
           <div className="profile-status-switches">
           <label
             className="switch"
-            title="Accept whatever certificate the server presents at each connect (it is pinned automatically, since openconnect no longer has --no-cert-check). Insecure: prefer 'Server cert pin'. Ignored when a pin is set."
+            title="Automatic mode: accept whatever certificate the server presents at each connect, so a changed upstream certificate never breaks the connection (a key change is logged). No protection against a man-in-the-middle. Ignored when Server cert pin is set."
           >
             <input
               checked={draft.trusted_cert}
