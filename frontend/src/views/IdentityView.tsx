@@ -348,7 +348,7 @@ export function IdentityView({
           <div className="panel-header">
             <h2>
               Group policy
-              <KorclientHint text="Routes and Split DNS below reach any client over the standard AnyConnect handshake, and are also synced live to connected korclient clients via GET /api/client/routing (polled every sync.interval_seconds) — changes apply without reconnecting." />
+              <KorclientHint text="Routes and Split DNS below reach any client over the standard AnyConnect handshake, and are also synced live to connected Korvus clients (Config → Clients on the other server: “Use routes and domains pushed by the server” with a sync URL) via GET /api/client/routing — changes apply without reconnecting." />
             </h2>
           </div>
           <form onSubmit={onSaveGroup}>
@@ -373,7 +373,7 @@ export function IdentityView({
             <label>
               <span>
                 Routes
-                <KorclientHint text="korclient applies this as an nftables policy-route (kept out of the OS routing table). A stock OpenConnect client gets it as a plain pushed route instead." />
+                <KorclientHint text="A Korvus client applies this as an nftables policy-route (kept out of the OS routing table). A stock OpenConnect client gets it as a plain pushed route instead." />
               </span>
               <textarea
                 value={groupDraft.routes}
@@ -402,7 +402,7 @@ export function IdentityView({
             <label>
               <span>
                 Split DNS
-                <KorclientHint text="korclient resolves these through its own dnsmasq and routes the results through the tunnel automatically. A stock OpenConnect client only gets DNS-suffix scoping, with no real traffic routing." />
+                <KorclientHint text="A Korvus client resolves these through its own dnsmasq and routes the results through the tunnel automatically. A stock OpenConnect client only gets DNS-suffix scoping, with no real traffic routing." />
               </span>
               <textarea
                 value={groupDraft.split_dns}

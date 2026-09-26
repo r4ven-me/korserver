@@ -3,10 +3,10 @@ import type { FormEvent } from "react";
 import { BulkListEditor } from "../../components/BulkListEditor";
 import { SettingsTabs } from "../../components/SettingsTabs";
 import { IconButton } from "../../components/ui";
-import { type RoutingDraft, RoutingListSourcesPanel } from "./RoutingListSourcesPanel";
+import { type RoutingDraft, RoutingListSourcesPanel } from "../upstream/RoutingListSourcesPanel";
 import type { RoutingListStatus } from "../../api";
 
-export function UpstreamSettingsDialog({
+export function ClientsSettingsDialog({
   upstreamInterface,
   checkInterval,
   checkThreshold,
@@ -16,10 +16,6 @@ export function UpstreamSettingsDialog({
   checkHost,
   hasActiveProfile,
   upstreamEnabled,
-  routes,
-  domains,
-  routesStatus,
-  domainsStatus,
   hostRoutes,
   hostDomains,
   hostRoutesStatus,
@@ -34,12 +30,6 @@ export function UpstreamSettingsDialog({
   onConnectOnBootChange,
   onCheckHostChange,
   onRoutingDraftChange,
-  onSaveRoutes,
-  onSaveDomains,
-  onPreviewRoutesUrl,
-  onRefreshRoutesUrl,
-  onPreviewDomainsUrl,
-  onRefreshDomainsUrl,
   onSaveHostRoutes,
   onSaveHostDomains,
   onPreviewHostRoutesUrl,
@@ -58,10 +48,6 @@ export function UpstreamSettingsDialog({
   checkHost: string;
   hasActiveProfile: boolean;
   upstreamEnabled: boolean;
-  routes: string[];
-  domains: string[];
-  routesStatus: RoutingListStatus | null;
-  domainsStatus: RoutingListStatus | null;
   hostRoutes: string[];
   hostDomains: string[];
   hostRoutesStatus: RoutingListStatus | null;
@@ -76,12 +62,6 @@ export function UpstreamSettingsDialog({
   onConnectOnBootChange: (value: boolean) => void;
   onCheckHostChange: (value: string) => void;
   onRoutingDraftChange: (value: RoutingDraft) => void;
-  onSaveRoutes: (items: string[]) => void;
-  onSaveDomains: (items: string[]) => void;
-  onPreviewRoutesUrl: (url: string) => void;
-  onRefreshRoutesUrl: (url: string) => void;
-  onPreviewDomainsUrl: (url: string) => void;
-  onRefreshDomainsUrl: (url: string) => void;
   onSaveHostRoutes: (items: string[]) => void;
   onSaveHostDomains: (items: string[]) => void;
   onPreviewHostRoutesUrl: (url: string) => void;
@@ -91,17 +71,15 @@ export function UpstreamSettingsDialog({
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
 }) {
-  const splitEnabled = routingDraft.mode === "split";
-  const splitDnsEnabled = splitEnabled && routingDraft.tunnelDns;
   return (
     <div className="modal-backdrop" role="presentation">
       <section className="modal-panel" role="dialog" aria-modal="true">
         <div className="panel-header">
-          <h2>Upstream settings</h2>
+          <h2>Clients settings</h2>
           <IconButton label="Close" icon={X} onClick={onClose} />
         </div>
         <form className="upstream-settings-form" onSubmit={onSave}>
-          <SettingsTabs ariaLabel="Upstream settings">
+          <SettingsTabs ariaLabel="Clients settings">
           <details className="settings-details upstream-settings-section">
             <summary>Connection &amp; health</summary>
             <div className="settings-grid settings-details-body">
@@ -112,7 +90,7 @@ export function UpstreamSettingsDialog({
                   onChange={(event) => onInterfaceChange(event.target.value)}
                 />
               </label>
-              <label title="Health-check target for the active profile">
+              <label title="Health-check target for the default client, pinged through its tunnel">
                 <span>Check host</span>
                 <input
                   value={checkHost}
@@ -153,7 +131,7 @@ export function UpstreamSettingsDialog({
               </label>
               <label
                 className="switch"
-                title="When health checks fail, try the other configured profiles in turn (after reconnecting the active one first)"
+                title="When health checks fail, try the other configured clients in turn (after reconnecting the default one first)"
               >
                 <input
                   checked={failover}
@@ -164,7 +142,7 @@ export function UpstreamSettingsDialog({
               </label>
               <label
                 className="switch"
-                title="Whether the watchdog dials the selected profile on its own the first time it sees it down after the server/container starts. Off leaves upstream disconnected after a restart until an admin connects it manually -- once any connection succeeds, normal reconnect-on-failure resumes regardless of this flag."
+                title="Whether the watchdog dials the default client on its own the first time it sees it down after the server/container starts. Off leaves it disconnected after a restart until an admin connects it manually -- once any connection succeeds, normal reconnect-on-failure resumes regardless of this flag."
               >
                 <input
                   checked={connectOnBoot}
@@ -177,11 +155,12 @@ export function UpstreamSettingsDialog({
           </details>
 
           <details className="settings-details upstream-settings-section">
-            <summary>Server host</summary>
+            <summary>Host traffic</summary>
             <p className="muted-line">
-              Independent of what clients get below -- does the server itself (not VPN
-              clients) send its own outbound traffic through Upstream too?
-              {!upstreamEnabled && " Inert until Upstream is enabled."}
+              Does this host itself send its own outbound traffic through the default
+              client? Each client can also carry its own host routes (and the lists its
+              server pushes) -- see the client&rsquo;s edit dialog.
+              {!upstreamEnabled && " Inert until Clients are enabled."}
             </p>
             <label className="switch">
               <input
@@ -192,7 +171,7 @@ export function UpstreamSettingsDialog({
                 }
                 type="checkbox"
               />
-              <span>Route this host&rsquo;s own traffic through Upstream</span>
+              <span>Route this host&rsquo;s own traffic through the default client</span>
             </label>
             {routingDraft.hostTraffic && (
               <label
@@ -218,8 +197,8 @@ export function UpstreamSettingsDialog({
             {routingDraft.hostTraffic && routingDraft.hostMode === "split" && (
               <div className="routing-substep">
                 <p className="muted-line">
-                  Own list, separate from the client&rsquo;s below -- the host follows these
-                  routes/domains, not the client&rsquo;s.
+                  Own list, separate from the Upstream relay lists -- the host follows these
+                  routes/domains, not the VPN users&rsquo;.
                 </p>
                 <section className="split">
                   <BulkListEditor
@@ -290,131 +269,21 @@ export function UpstreamSettingsDialog({
                 </p>
               </div>
             )}
-          </details>
-
-          <details className="settings-details upstream-settings-section">
-            <summary>VPN clients</summary>
-            <p className="muted-line">
-              What happens to a connected client&rsquo;s traffic once it leaves ocserv, when
-              no profile claims it specifically (a profile&rsquo;s own client/host routing
-              toggles, in its edit dialog, always win over this).
-              {!upstreamEnabled && " Inert until Upstream is enabled."}
-            </p>
-            <label className="switch">
-              <input
-                checked={routingDraft.clientTraffic}
-                disabled={!upstreamEnabled}
+            <label
+              title="Domain-based host routing (host domains, split-DNS pushed by a server) only sees lookups that go through the built-in dnsmasq. Needs network_mode: host and a mount: resolv.conf → '/etc/resolv.conf:/host/etc/resolv.conf' (restored when korserver stops); systemd-resolved → '/etc/systemd/resolved.conf.d:/host/resolved.conf.d' (then restart systemd-resolved on the host once)."
+            >
+              <span>Host DNS</span>
+              <select
+                value={routingDraft.hostDns}
                 onChange={(event) =>
-                  onRoutingDraftChange({ ...routingDraft, clientTraffic: event.target.checked })
+                  onRoutingDraftChange({ ...routingDraft, hostDns: event.target.value })
                 }
-                type="checkbox"
-              />
-              <span>Route a client&rsquo;s traffic through Upstream by default</span>
+              >
+                <option value="off">Leave the host resolver alone</option>
+                <option value="resolv_conf">Point /etc/resolv.conf at dnsmasq</option>
+                <option value="resolved">systemd-resolved drop-in</option>
+              </select>
             </label>
-            {routingDraft.clientTraffic && (
-              <label>
-                <span>Mode</span>
-                <select
-                  disabled={!upstreamEnabled}
-                  value={routingDraft.mode}
-                  onChange={(event) =>
-                    onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
-                  }
-                >
-                  <option value="full">Full (all traffic via Upstream)</option>
-                  <option value="split">Split (only listed traffic via Upstream)</option>
-                </select>
-              </label>
-            )}
-            {routingDraft.clientTraffic && splitEnabled && (
-              <div className="routing-substep">
-                <label
-                  className="switch"
-                  title="Push this server's dnsmasq as the DNS for VPN clients and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → DNS."
-                >
-                  <input
-                    checked={routingDraft.tunnelDns}
-                    disabled={!upstreamEnabled}
-                    onChange={(event) =>
-                      onRoutingDraftChange({ ...routingDraft, tunnelDns: event.target.checked })
-                    }
-                    type="checkbox"
-                  />
-                  <span>Also split by domain (needs this server&rsquo;s own DNS)</span>
-                </label>
-                <section className="split">
-                  <BulkListEditor
-                    title="Routes"
-                    items={routes}
-                    placeholder={"10.20.0.0/16\n203.0.113.5"}
-                    busy={busy === "save-routes"}
-                    disabled={!upstreamEnabled}
-                    onSave={onSaveRoutes}
-                  />
-                  {splitDnsEnabled && (
-                    <BulkListEditor
-                      title="Domains"
-                      items={domains}
-                      placeholder={"internal.example\ncorp.example.com"}
-                      busy={busy === "save-domains"}
-                      disabled={!upstreamEnabled}
-                      onSave={onSaveDomains}
-                    />
-                  )}
-                </section>
-                <section className="split">
-                  <RoutingListSourcesPanel
-                    title="Route sources"
-                    filesLabel="Route files (one path per line)"
-                    filesPlaceholder={"/var/lib/korserver/extra-routes.txt"}
-                    urlsLabel="Route URLs (one per line)"
-                    urlsPlaceholder={"https://lists.example.com/routes.txt"}
-                    disabled={!upstreamEnabled}
-                    filesText={routingDraft.routesFilesText}
-                    urlsText={routingDraft.routesUrlsText}
-                    status={routesStatus}
-                    busy={busy}
-                    busyKeyPrefix="routes"
-                    onFilesTextChange={(value) =>
-                      onRoutingDraftChange({ ...routingDraft, routesFilesText: value })
-                    }
-                    onUrlsTextChange={(value) =>
-                      onRoutingDraftChange({ ...routingDraft, routesUrlsText: value })
-                    }
-                    onPreviewUrl={onPreviewRoutesUrl}
-                    onRefreshUrl={onRefreshRoutesUrl}
-                  />
-                  {splitDnsEnabled && (
-                    <RoutingListSourcesPanel
-                      title="Domain sources"
-                      filesLabel="Domain files (one path per line)"
-                      filesPlaceholder={"/var/lib/korserver/extra-domains.txt"}
-                      urlsLabel="Domain URLs (one per line)"
-                      urlsPlaceholder={"https://lists.example.com/domains.txt"}
-                      disabled={!upstreamEnabled}
-                      filesText={routingDraft.domainsFilesText}
-                      urlsText={routingDraft.domainsUrlsText}
-                      status={domainsStatus}
-                      busy={busy}
-                      busyKeyPrefix="domains"
-                      onFilesTextChange={(value) =>
-                        onRoutingDraftChange({ ...routingDraft, domainsFilesText: value })
-                      }
-                      onUrlsTextChange={(value) =>
-                        onRoutingDraftChange({ ...routingDraft, domainsUrlsText: value })
-                      }
-                      onPreviewUrl={onPreviewDomainsUrl}
-                      onRefreshUrl={onRefreshDomainsUrl}
-                    />
-                  )}
-                </section>
-                <p className="muted-line">
-                  Route/domain sources are saved together with the rest of this dialog
-                  (Save settings below) -- fill these in, click Save, then validate/download
-                  each URL.
-                </p>
-              </div>
-            )}
           </details>
 
           <details className="settings-details upstream-settings-section">

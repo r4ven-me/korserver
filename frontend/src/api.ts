@@ -93,6 +93,10 @@ export type UpstreamProfile = {
   route_host_enabled?: boolean;
   host_routes?: string[];
   host_domains?: string[];
+  accept_server_routes?: boolean;
+  sync_url?: string | null;
+  sync_interval?: number;
+  sync_verify_tls?: boolean;
   routing_offset?: number | null;
   enabled: boolean;
 };
@@ -125,11 +129,33 @@ export type UpstreamProfileDraft = {
   route_host_enabled: boolean;
   host_routes: string;
   host_domains: string;
+  // Server-driven host routing: add the routes/split-DNS domains the
+  // upstream server pushes (and, with a sync URL, keeps updating) to the
+  // host lists above.
+  accept_server_routes: boolean;
+  sync_url: string;
+  sync_interval: string;
+  sync_verify_tls: boolean;
   // Explicit fwmark/table_id offset override; blank derives it from the
   // profile's position in upstream.profiles.
   routing_offset: string;
   enable: boolean;
   enabled: boolean;
+};
+
+// What the upstream server pushed to one profile (handshake or sync).
+export type ServerRouting = {
+  accept: boolean;
+  active: boolean;
+  routes: string[];
+  domains: string[];
+  dns: string[];
+  source: string;
+  version: string;
+  updated_at: number;
+  synced_at: number;
+  sync_error: string;
+  warnings: string[];
 };
 
 export type UpstreamConnection = {
@@ -140,6 +166,7 @@ export type UpstreamConnection = {
   remote: string | null;
   connected_since: string | null;
   connected_for_seconds: number | null;
+  server_routing?: ServerRouting;
 };
 
 export type UpstreamStatus = {
@@ -890,6 +917,7 @@ export function saveRoutingSettings(
     tunnel_dns: boolean;
     host_traffic: boolean;
     host_mode: string;
+    host_dns: string;
     main_interface: string;
     fwmark: string;
     table_id: number;
@@ -903,8 +931,11 @@ export function saveRoutingSettings(
     host_domains_files: string[];
     host_domains_urls: string[];
   }
-): Promise<{ status: string }> {
-  return requestJson<{ status: string }>("/api/routing/settings", token, {
+): Promise<{ status: string; host_dns?: { mode: string; changed: boolean; detail: string } }> {
+  return requestJson<{
+    status: string;
+    host_dns?: { mode: string; changed: boolean; detail: string };
+  }>("/api/routing/settings", token, {
     method: "POST",
     body: body(payload)
   });
@@ -1216,9 +1247,22 @@ export function saveUpstreamProfile(
         .split(/[\n,]+/)
         .map((item) => item.trim())
         .filter(Boolean),
+      sync_url: payload.sync_url.trim() || null,
+      sync_interval: Number(payload.sync_interval) || 60,
       routing_offset: payload.routing_offset.trim() ? Number(payload.routing_offset) : null
     })
   });
+}
+
+export function syncUpstreamProfile(
+  token: string,
+  name: string
+): Promise<{ status: string; server_routing: ServerRouting }> {
+  return requestJson<{ status: string; server_routing: ServerRouting }>(
+    `/api/upstream/profiles/${encodeURIComponent(name)}/sync`,
+    token,
+    { method: "POST" }
+  );
 }
 
 export function setUpstreamProfileEnabled(

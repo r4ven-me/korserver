@@ -218,6 +218,22 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
       "/api/upstream": options.upstreamProfiles ?? [],
       "/api/upstream/settings": { status: "ok" },
       "/api/upstream/profiles": { status: "ok" },
+      "/api/upstream/profiles/office/sync": {
+        status: "synced",
+        server_routing: {
+          accept: true,
+          active: true,
+          routes: ["10.20.0.0/16"],
+          domains: [],
+          dns: [],
+          source: "sync",
+          version: "v2",
+          updated_at: 2,
+          synced_at: 2,
+          sync_error: "",
+          warnings: []
+        }
+      },
       "/api/upstream/connect": commandResult,
       "/api/upstream/fetch-pin": {
         pin: "pin-sha256:UPSTREAMpin0000000000000000000000000000000=",

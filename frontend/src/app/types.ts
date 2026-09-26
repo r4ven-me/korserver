@@ -17,14 +17,15 @@ export type ConfigSection =
   | "certificates"
   | "identity"
   | "internal_dns"
+  | "clients"
   | "upstream"
   | "web"
   | "advanced";
 
 // "routing" is no longer its own nav section (its settings live inside the
-// "upstream" section, see the config section render block) but is kept as
-// a distinct command-output/busy key so its nftables/route actions don't
-// clobber upstream's own last-command panel.
+// "clients" and "upstream" sections, see the config section render block)
+// but is kept as a distinct command-output/busy key so its nftables/route
+// actions don't clobber upstream's own last-command panel.
 export type CommandOutputKey = Tab | ConfigSection | "routing";
 
 export const configSections: Array<{ id: ConfigSection; label: string }> = [
@@ -33,6 +34,7 @@ export const configSections: Array<{ id: ConfigSection; label: string }> = [
   { id: "certificates", label: "Certificates" },
   { id: "auth", label: "Authentication" },
   { id: "identity", label: "Identity · Experimental" },
+  { id: "clients", label: "Clients" },
   { id: "upstream", label: "Upstream" },
   { id: "internal_dns", label: "DNS" },
   { id: "web", label: "Web / API" },

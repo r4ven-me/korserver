@@ -429,6 +429,20 @@ label span,
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 
+.upstream-empty {
+  align-items: flex-start;
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  display: grid;
+  gap: 12px;
+  justify-items: start;
+  padding: 16px;
+}
+
+.upstream-empty p {
+  margin: 0;
+}
+
 .upstream-settings-form {
   display: grid;
   gap: 12px;
@@ -2090,7 +2104,8 @@ code {
 }
 
 /* Marks a field/section whose full behavior (real policy-routing, not just a
-   pushed value) is specific to the korclient image; see korclient/README.md. */
+   pushed value) needs a Korvus client: Config → Clients with "Use routes and
+   domains pushed by the server". */
 .korclient-hint {
   cursor: help;
   display: inline-flex;
