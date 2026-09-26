@@ -44,8 +44,21 @@ class RoutingTarget:
     fwmark: str
     table_id: int
     interface: str
-    set_v4: str
-    set_v6: str
+    # Each family is a static/dynamic pair, not a single set: `_static` holds
+    # this target's config-known routes (profile `routes`, `routing.split`),
+    # rebuilt on every apply; `_dynamic` is populated only by dnsmasq's
+    # nftset= directive as split-DNS domains resolve (see dnsmasq.conf.j2)
+    # and is never touched by a routes/domains-only refresh. A naive
+    # single-set design that gets flushed on every refresh would wipe out
+    # every already-resolved domain IP each time a reload happens (profile
+    # edit, host DNS toggle, pushed-routes sync, panel Reload) -- silently
+    # breaking any long-lived connection still using one while a
+    # constantly-re-resolving client recovers almost immediately. See
+    # NftablesService.apply()'s docstring.
+    set_v4_static: str
+    set_v4_dynamic: str
+    set_v6_static: str
+    set_v6_dynamic: str
     mode: str  # "full" or "split" -- only the default target can be "full"
     routes: list[str]
     domains: list[str]
@@ -64,8 +77,11 @@ class RoutingTarget:
     # host_traffic_enabled/host_mode).
     host_routes: list[str]
     host_domains: list[str]
-    host_set_v4: str | None
-    host_set_v6: str | None
+    # Same static/dynamic pairing as set_v4_static/set_v4_dynamic above.
+    host_set_v4_static: str | None
+    host_set_v4_dynamic: str | None
+    host_set_v6_static: str | None
+    host_set_v6_dynamic: str | None
     # IPv6 part of the host routes (host_routes above is IPv4 only): each
     # family goes into its own typed nft set.
     host_routes_v6: list[str] = field(default_factory=list)
@@ -78,7 +94,7 @@ class RoutingTarget:
 
     @property
     def host_enabled(self) -> bool:
-        return bool(self.host_set_v4)
+        return bool(self.host_set_v4_static)
 
 
 class RoutingService:
@@ -332,8 +348,10 @@ class RoutingService:
                 fwmark=config.routing.fwmark,
                 table_id=config.routing.table_id,
                 interface=default_target_interface,
-                set_v4="split_v4",
-                set_v6="split_v6",
+                set_v4_static="split_v4_static",
+                set_v4_dynamic="split_v4_dynamic",
+                set_v6_static="split_v6_static",
+                set_v6_dynamic="split_v6_dynamic",
                 mode=config.routing.mode,
                 routes=self.list_routes(),
                 domains=self.list_domains() if config.routing.mode == "split" else [],
@@ -347,8 +365,10 @@ class RoutingService:
                 profile=config.upstream.selected_profile(),
                 host_routes=[],
                 host_domains=[],
-                host_set_v4=None,
-                host_set_v6=None,
+                host_set_v4_static=None,
+                host_set_v4_dynamic=None,
+                host_set_v6_static=None,
+                host_set_v6_dynamic=None,
             )
         ]
         # Named per-profile targets only exist at all when upstream is
@@ -405,8 +425,10 @@ class RoutingService:
                         fwmark=f"0x{base_fwmark + offset:0{fwmark_width}x}",
                         table_id=config.routing.table_id + offset,
                         interface=config.upstream.profile_interface(profile),
-                        set_v4=f"split_v4_{safe_name}",
-                        set_v6=f"split_v6_{safe_name}",
+                        set_v4_static=f"split_v4_{safe_name}_static",
+                        set_v4_dynamic=f"split_v4_{safe_name}_dynamic",
+                        set_v6_static=f"split_v6_{safe_name}_static",
+                        set_v6_dynamic=f"split_v6_{safe_name}_dynamic",
                         mode="split",
                         routes=profile.routes if profile.route_clients_enabled else [],
                         domains=profile.domains if profile.route_clients_enabled else [],
@@ -414,8 +436,14 @@ class RoutingService:
                         profile=profile,
                         host_routes=host_routes_v4 if host_active else [],
                         host_domains=host_domain_list if host_active else [],
-                        host_set_v4=f"host_v4_{safe_name}" if host_active else None,
-                        host_set_v6=f"host_v6_{safe_name}" if host_active else None,
+                        host_set_v4_static=f"host_v4_{safe_name}_static" if host_active else None,
+                        host_set_v4_dynamic=(
+                            f"host_v4_{safe_name}_dynamic" if host_active else None
+                        ),
+                        host_set_v6_static=f"host_v6_{safe_name}_static" if host_active else None,
+                        host_set_v6_dynamic=(
+                            f"host_v6_{safe_name}_dynamic" if host_active else None
+                        ),
                         host_routes_v6=host_routes_v6 if host_active else [],
                         server_domains=pushed.domains if host_active else [],
                         server_dns=pushed.dns if host_active else [],

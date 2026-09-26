@@ -198,8 +198,8 @@ def test_dnsmasq_render_feeds_named_target_domains_into_their_own_set(tmp_path: 
     rendered = DnsmasqConfigRenderer().render(config)
 
     assert (
-        "nftset=/finance-internal.corp/4#inet#korserver_filter#split_v4_finance,"
-        "6#inet#korserver_filter#split_v6_finance" in rendered
+        "nftset=/finance-internal.corp/4#inet#korserver_filter#split_v4_finance_dynamic,"
+        "6#inet#korserver_filter#split_v6_finance_dynamic" in rendered
     )
     # No DNS-forwarding override -- that's specific to routing.split.tunnel_dns.
     assert "server=/finance-internal.corp/" not in rendered
@@ -261,8 +261,8 @@ def test_dnsmasq_render_feeds_named_target_host_domains_into_their_own_host_set(
     rendered = DnsmasqConfigRenderer().render(config)
 
     assert (
-        "nftset=/finance-internal.corp/4#inet#korserver_filter#host_v4_finance,"
-        "6#inet#korserver_filter#host_v6_finance" in rendered
+        "nftset=/finance-internal.corp/4#inet#korserver_filter#host_v4_finance_dynamic,"
+        "6#inet#korserver_filter#host_v6_finance_dynamic" in rendered
     )
 
 
@@ -283,8 +283,8 @@ def test_dnsmasq_render_feeds_host_split_domains_into_their_own_set(tmp_path: Pa
     rendered = DnsmasqConfigRenderer().render(config)
 
     assert (
-        "nftset=/intranet.example/4#inet#korserver_filter#host_split_v4,"
-        "6#inet#korserver_filter#host_split_v6" in rendered
+        "nftset=/intranet.example/4#inet#korserver_filter#host_split_v4_dynamic,"
+        "6#inet#korserver_filter#host_split_v6_dynamic" in rendered
     )
 
 

@@ -240,8 +240,8 @@ def test_nftables_render_puts_pushed_ipv6_routes_into_the_v6_host_set(tmp_path: 
 
     rendered = NftablesConfigRenderer().render(config)
 
-    v4_block = rendered.split("set host_v4_office {", 1)[1].split("}", 2)
-    v6_block = rendered.split("set host_v6_office {", 1)[1].split("}", 2)
+    v4_block = rendered.split("set host_v4_office_static {", 1)[1].split("}", 2)
+    v6_block = rendered.split("set host_v6_office_static {", 1)[1].split("}", 2)
     assert "10.20.0.0/16" in v4_block[0] + v4_block[1]
     assert "2001:db8:10::/48" not in v4_block[0] + v4_block[1]
     assert "2001:db8:10::/48" in v6_block[0] + v6_block[1]

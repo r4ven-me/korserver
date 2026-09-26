@@ -65,8 +65,11 @@ class DnsmasqConfigRenderer(TemplateRenderer):
             "config": config,
             "upstream_dns": upstream_dns,
             "filter_table": f"{config.routing.nft_prefix}_filter",
-            "split_v4_set": "split_v4",
-            "split_v6_set": "split_v6",
+            # dnsmasq's nftset= only ever ADDS resolved IPs -- it must target
+            # the *_dynamic set (see nftables.nft.j2), never the *_static one
+            # a normal apply flushes and rebuilds from config.
+            "split_v4_set": "split_v4_dynamic",
+            "split_v6_set": "split_v6_dynamic",
             "split_dns_active": split_dns_active,
             "split_domains": routing_service.list_domains() if split_dns_active else [],
             "public_upstreams": public_upstreams,

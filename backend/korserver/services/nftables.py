@@ -50,25 +50,16 @@ class NftablesService:
         targets, resolved_interface, _ = self.renderer.resolve_targets(
             self.config, outbound_interface
         )
-        content = self.render(outbound_interface)
-        target = self.renderer.target_path(self.config)
         if dry_run:
+            content = self.render(outbound_interface)
+            target = self.renderer.target_path(self.config)
             return [
                 CommandResult(("nft", "-f", str(target)), 0, content, "", True),
                 *self._reassert_policy_routing(targets, resolved_interface, dry_run=True),
                 *self._ensure_docker_forward_compat(dry_run=True),
             ]
-        self.files.atomic_write_text(target, content)
-        # A single `nft -f` invocation is one atomic transaction (see the
-        # rendered file's own add/delete/redefine comment): either the whole
-        # ruleset replaces cleanly, or nothing changes and the previous,
-        # still-working tables stay in place. Do not run separate `nft
-        # delete table` commands beforehand -- that would leave a window
-        # with no kill-switch/NAT at all if the reload then failed.
-        results = [
-            self.runner.run(["nft", "-f", str(target)], timeout=30, check=False),
-        ]
-        applied = results[-1]
+        applied = self._apply_ruleset(outbound_interface)
+        results = [applied]
         # Only touch routing after a successful ruleset load; a failed nft
         # apply should change nothing else.
         policy_results: list[CommandResult] = []
@@ -94,6 +85,94 @@ class NftablesService:
             results[-1] = self._explain_apply_failure(applied)
         results.extend(policy_results)
         return results
+
+    def _apply_ruleset(self, outbound_interface: str | None) -> CommandResult:
+        """Load or refresh the nftables ruleset.
+
+        Two paths, chosen by whether the live table's set schema already
+        matches what the current config expects (see _static_sets_ready):
+
+        - not ready (first apply ever, or the schema changed -- a profile
+          was added/removed, host routing was toggled, or an older
+          korserver's table lacks the current *_static/*_dynamic split):
+          full `delete table` + `nft -f` recreate. Necessary and harmless
+          here -- the *_dynamic sets start out empty either way, and this
+          also naturally drops any leftover set from a target that no
+          longer exists.
+        - ready: refresh ONLY the *_static sets in place (flush + re-add),
+          leaving every *_dynamic set -- every IP dnsmasq has resolved for a
+          split-DNS domain (see dnsmasq.conf.j2's nftset= directive) --
+          completely untouched.
+
+        The second path is what makes routine reloads (profile route/domain
+        edits, host DNS toggles, periodic sync of upstream-pushed routes,
+        panel Reload, `korctl nft apply`) safe for long-lived connections.
+        Always doing a full recreate wipes the dynamic sets on every one of
+        those, even though most of them don't actually change which
+        targets/host-routing exist -- only their route/domain contents. A
+        domain resolved once at the start of a long session (e.g. an API/CLI
+        client holding one connection for the whole session, unlike a
+        browser which re-resolves constantly) would then silently fall out
+        of its split set the next time any of those fired mid-session, stop
+        being marked, and fall through to the default route -- breaking the
+        session with no client-visible cause.
+
+        Self-healing: if the live table gets torn down by something outside
+        this process's control between the readiness check and the refresh
+        actually running, the refresh's `flush set` targets a set that no
+        longer exists and fails -- falling back to a full recreate here
+        means the very next call repairs itself instead of needing a manual
+        intervention.
+        """
+        if self._static_sets_ready(outbound_interface):
+            refresh_result = self._apply_static_refresh(outbound_interface)
+            if refresh_result.ok:
+                return refresh_result
+        return self._apply_full_recreate(outbound_interface)
+
+    def _static_sets_ready(self, outbound_interface: str | None) -> bool:
+        """Whether the live nftables table already has exactly the
+        *_static/*_dynamic sets the current config expects -- see
+        _apply_ruleset. Any probe failure (table missing, `nft -j` not
+        supported, unexpected output) is treated as not-ready so the caller
+        falls back to the always-correct full recreate.
+        """
+        expected = self.renderer.expected_set_names(self.config, outbound_interface)
+        probe = self.runner.run(
+            ["nft", "-j", "list", "table", "inet", self.filter_table],
+            check=False,
+            timeout=10,
+        )
+        if not probe.ok:
+            return False
+        try:
+            data = json.loads(probe.stdout)
+        except ValueError:
+            return False
+        current = {
+            item["set"]["name"]
+            for item in data.get("nftables", [])
+            if isinstance(item, dict) and "set" in item
+        }
+        return current == expected
+
+    def _apply_static_refresh(self, outbound_interface: str | None) -> CommandResult:
+        content = self.renderer.render_static_refresh(self.config, outbound_interface)
+        target = self.renderer.static_refresh_path(self.config)
+        self.files.atomic_write_text(target, content)
+        return self.runner.run(["nft", "-f", str(target)], timeout=30, check=False)
+
+    def _apply_full_recreate(self, outbound_interface: str | None) -> CommandResult:
+        content = self.render(outbound_interface)
+        target = self.renderer.target_path(self.config)
+        # A single `nft -f` invocation is one atomic transaction (see the
+        # rendered file's own add/delete/redefine comment): either the whole
+        # ruleset replaces cleanly, or nothing changes and the previous,
+        # still-working tables stay in place. Do not run separate `nft
+        # delete table` commands beforehand -- that would leave a window
+        # with no kill-switch/NAT at all if the reload then failed.
+        self.files.atomic_write_text(target, content)
+        return self.runner.run(["nft", "-f", str(target)], timeout=30, check=False)
 
     def _reassert_policy_routing(
         self,

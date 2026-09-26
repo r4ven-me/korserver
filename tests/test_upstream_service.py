@@ -829,11 +829,14 @@ def test_connect_active_applies_nftables_before_dialing_when_mode_not_direct(
         runner.close()
 
     programs = [call["argv"][0] for call in runner.calls]
-    # One atomic `nft -f` load (folding the old table delete/redefine
-    # sequence into one transaction, see templates/nftables.nft.j2) plus one
-    # `nft list chain ...` existence check for the Docker DOCKER-USER
-    # compat shim (a no-op here since FakeRunner reports it absent).
-    assert programs.count("nft") == 2
+    # One `nft -j list table ...` readiness probe (the live table's schema
+    # doesn't match yet on this first apply, see NftablesService._apply_ruleset)
+    # that decides a full recreate is needed, one atomic `nft -f` load
+    # (folding the old table delete/redefine sequence into one transaction,
+    # see templates/nftables.nft.j2), plus one `nft list chain ...` existence
+    # check for the Docker DOCKER-USER compat shim (a no-op here since
+    # FakeRunner reports it absent).
+    assert programs.count("nft") == 3
     assert programs.index("nft") < programs.index("openconnect")
 
 

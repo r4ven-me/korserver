@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -105,9 +106,55 @@ def test_split_sets_use_auto_merge_for_overlapping_intervals(tmp_path: Path) -> 
 
     rendered = NftablesConfigRenderer().render(config)
 
-    v4_set, v6_set = rendered.split("set split_v6")
-    assert "auto-merge" in v4_set
-    assert "auto-merge" in v6_set
+    v4_static, v4_dynamic = rendered.split("set split_v4_dynamic")
+    v6_static, v6_dynamic = rendered.split("set split_v6_dynamic")
+    assert "auto-merge" in v4_static
+    assert "auto-merge" in v4_dynamic
+    assert "auto-merge" in v6_static
+    assert "auto-merge" in v6_dynamic
+
+
+def test_render_static_refresh_only_touches_static_sets(tmp_path: Path) -> None:
+    config = load_config(
+        tmp_path / "missing.yaml",
+        cli_overrides={
+            "routing": {
+                "mode": "split",
+                "split": {"routes": ["192.168.25.0/24"]},
+                "host_traffic": True,
+                "host_mode": "split",
+                "host_split": {"routes": ["10.2.0.0/16"]},
+            },
+            "upstream": {
+                "enabled": True,
+                "profiles": [
+                    _profile_with_target(
+                        "finance",
+                        interface="oc-finance",
+                        routes=["10.50.0.0/16"],
+                        route_host_enabled=True,
+                        host_routes=["10.90.0.0/16"],
+                    ),
+                ],
+            },
+        },
+        environ={},
+    )
+
+    refresh = NftablesConfigRenderer().render_static_refresh(config)
+
+    assert "flush set inet korserver_filter split_v4_static" in refresh
+    assert "add element inet korserver_filter split_v4_static { 192.168.25.0/24 }" in refresh
+    assert "flush set inet korserver_filter split_v4_finance_static" in refresh
+    assert "add element inet korserver_filter split_v4_finance_static { 10.50.0.0/16 }" in refresh
+    assert "flush set inet korserver_filter host_v4_finance_static" in refresh
+    assert "add element inet korserver_filter host_v4_finance_static { 10.90.0.0/16 }" in refresh
+    assert "flush set inet korserver_filter host_split_v4_static" in refresh
+    assert "add element inet korserver_filter host_split_v4_static { 10.2.0.0/16 }" in refresh
+    # Never touches any *_dynamic set -- that's dnsmasq's job, and a refresh
+    # here must not wipe already-resolved domain IPs.
+    assert "_dynamic\n" not in refresh
+    assert "flush set inet korserver_filter split_v4_dynamic" not in refresh
 
 
 def test_nftables_render_includes_routes_added_at_runtime(tmp_path: Path) -> None:
@@ -262,10 +309,17 @@ def test_client_traffic_off_does_not_affect_host_split_mode(tmp_path: Path) -> N
     assert "192.168.25.0/24" in rendered
     assert (
         f"ct direction original ip daddr != {config.server.ipv4_network} "
-        f"ip daddr @host_split_v4 counter meta mark set {config.routing.fwmark}" in rendered
+        f"ip daddr @host_split_v4_static counter meta mark set {config.routing.fwmark}"
+        in rendered
+    )
+    assert (
+        f"ct direction original ip daddr != {config.server.ipv4_network} "
+        f"ip daddr @host_split_v4_dynamic counter meta mark set {config.routing.fwmark}"
+        in rendered
     )
     # No client-facing prerouting mark for the default target.
-    assert "\n    ip daddr @split_v4 counter meta mark set" not in rendered
+    assert "\n    ip daddr @split_v4_static counter meta mark set" not in rendered
+    assert "\n    ip daddr @split_v4_dynamic counter meta mark set" not in rendered
 
 
 def test_host_split_mode_uses_its_own_list_not_the_clients(tmp_path: Path) -> None:
@@ -291,13 +345,13 @@ def test_host_split_mode_uses_its_own_list_not_the_clients(tmp_path: Path) -> No
 
     rendered = NftablesConfigRenderer().render(config)
 
-    assert "set split_v4" in rendered
+    assert "set split_v4_static" in rendered
     assert "10.1.0.0/16" in rendered
-    assert "set host_split_v4" in rendered
+    assert "set host_split_v4_static" in rendered
     assert "10.2.0.0/16" in rendered
     # The client set must not also contain the host's own CIDR (proves the
     # two lists aren't merged into one set).
-    set_split_section = rendered.split("set split_v4 {")[1].split("}")[0]
+    set_split_section = rendered.split("set split_v4_static {")[1].split("}")[0]
     assert "10.2.0.0/16" not in set_split_section
 
 
@@ -321,7 +375,13 @@ def test_host_traffic_split_mode_adds_output_marking_and_killswitch(tmp_path: Pa
     assert "type route hook output priority mangle" in rendered
     assert (
         f"ct direction original ip daddr != {config.server.ipv4_network} "
-        f"ip daddr @host_split_v4 counter meta mark set {config.routing.fwmark}" in rendered
+        f"ip daddr @host_split_v4_static counter meta mark set {config.routing.fwmark}"
+        in rendered
+    )
+    assert (
+        f"ct direction original ip daddr != {config.server.ipv4_network} "
+        f"ip daddr @host_split_v4_dynamic counter meta mark set {config.routing.fwmark}"
+        in rendered
     )
     # The host kill-switch must be a postrouting chain: an output-hook
     # filter chain shares nf_hook_state with the route chain and still sees
@@ -385,7 +445,8 @@ def test_host_mode_full_marks_all_host_traffic_unconditionally(tmp_path: Path) -
     )
     assert f"ct direction original ip6 counter meta mark set {config.routing.fwmark}" in rendered
     # Full mode must not also emit the split-set-scoped rule.
-    assert "@split_v4 counter meta mark" not in rendered
+    assert "@split_v4_static counter meta mark" not in rendered
+    assert "@split_v4_dynamic counter meta mark" not in rendered
 
 
 def test_nft_show_guides_apply_when_managed_tables_are_needed() -> None:
@@ -413,6 +474,95 @@ def test_nft_apply_explains_successful_empty_nft_output(tmp_path: Path) -> None:
     assert results[-1].returncode == 0
     assert "Applied korserver-owned nftables rules" in results[-1].stdout
     assert "masquerading" in results[-1].stdout
+
+
+class ReadySchemaRunner(CommandRunner):
+    """Fake `nft` that reports the live table already has exactly the given
+    static/dynamic set names -- the schema-matches case that should make
+    NftablesService take the surgical static-only refresh path instead of a
+    full table recreate. `refresh_ok=False` simulates the refresh's own
+    `nft -f` failing (e.g. the table was torn down between the readiness
+    probe and the refresh itself), which should self-heal to a full
+    recreate -- the full-recreate `nft -f` always succeeds here, since it's
+    the fallback ground truth being tested against.
+    """
+
+    def __init__(self, set_names: frozenset[str], *, refresh_ok: bool = True) -> None:
+        self.calls: list[list[str]] = []
+        self._set_names = set_names
+        self._refresh_ok = refresh_ok
+
+    def run(self, argv: Sequence[str], **kwargs: object) -> CommandResult:
+        del kwargs
+        self.calls.append(list(argv))
+        if tuple(argv[:4]) == ("nft", "-j", "list", "table"):
+            payload = {"nftables": [{"set": {"name": name}} for name in sorted(self._set_names)]}
+            return CommandResult(tuple(argv), 0, json.dumps(payload), "")
+        if tuple(argv[:2]) == ("nft", "-f"):
+            is_full_recreate = str(argv[2]).endswith("nftables.nft") and not str(
+                argv[2]
+            ).endswith("nftables-static-refresh.nft")
+            ok = is_full_recreate or self._refresh_ok
+            return CommandResult(tuple(argv), 0 if ok else 1, "", "" if ok else "flush failed")
+        return CommandResult(tuple(argv), 0, "", "")
+
+
+def _nft_f_calls(calls: list[list[str]]) -> list[list[str]]:
+    return [call for call in calls if tuple(call[:2]) == ("nft", "-f")]
+
+
+def test_nft_apply_uses_surgical_refresh_when_schema_already_matches(tmp_path: Path) -> None:
+    # The common case: a routes/domains-only change (profile edit, pushed-
+    # routes sync, panel Reload) with no change to which targets/host
+    # routing exist -- the live table's schema already matches, so a
+    # surgical *_static-only refresh is safe and preserves *_dynamic sets.
+    config = AppConfig.model_validate(
+        {"system": {"generated_dir": tmp_path}, "routing": {"mode": "split"}}
+    )
+    expected = NftablesConfigRenderer().expected_set_names(config)
+    runner = ReadySchemaRunner(expected)
+
+    NftablesService(config, runner=runner).apply()
+
+    calls = _nft_f_calls(runner.calls)
+    assert len(calls) == 1
+    assert calls[0][2].endswith("nftables-static-refresh.nft")
+
+
+def test_nft_apply_falls_back_to_full_recreate_when_schema_differs(tmp_path: Path) -> None:
+    # A stale/mismatched schema (e.g. from before a profile was added, or
+    # before this korserver version introduced the static/dynamic split at
+    # all) must not take the surgical path -- only a full recreate can
+    # correctly add the missing sets (and drop any now-orphaned ones).
+    config = AppConfig.model_validate(
+        {"system": {"generated_dir": tmp_path}, "routing": {"mode": "split"}}
+    )
+    runner = ReadySchemaRunner(frozenset({"split_v4_static"}))
+
+    NftablesService(config, runner=runner).apply()
+
+    calls = _nft_f_calls(runner.calls)
+    assert len(calls) == 1
+    assert calls[0][2].endswith("nftables.nft")
+    assert not calls[0][2].endswith("nftables-static-refresh.nft")
+
+
+def test_nft_apply_self_heals_to_full_recreate_when_surgical_refresh_fails(
+    tmp_path: Path,
+) -> None:
+    config = AppConfig.model_validate(
+        {"system": {"generated_dir": tmp_path}, "routing": {"mode": "split"}}
+    )
+    expected = NftablesConfigRenderer().expected_set_names(config)
+    runner = ReadySchemaRunner(expected, refresh_ok=False)
+
+    results = NftablesService(config, runner=runner).apply()
+
+    calls = _nft_f_calls(runner.calls)
+    assert len(calls) == 2
+    assert calls[0][2].endswith("nftables-static-refresh.nft")
+    assert calls[1][2].endswith("nftables.nft")
+    assert results[0].ok
 
 
 class RecordingRunner(CommandRunner):
@@ -663,9 +813,10 @@ def test_profile_with_routes_gets_its_own_fwmark_table_and_killswitch(tmp_path: 
     # finance is the 2nd configured profile (primary is 1st), so its
     # routing offset is 2 (derived from list position, not from a count of
     # profiles with routes) -> fwmark 0x0c01 + 2 = 0x0c03.
-    assert "set split_v4_finance" in rendered
+    assert "set split_v4_finance_static" in rendered
     assert "10.50.0.0/16" in rendered
-    assert "ip daddr @split_v4_finance counter meta mark set 0x0c03" in rendered
+    assert "ip daddr @split_v4_finance_static counter meta mark set 0x0c03" in rendered
+    assert "ip daddr @split_v4_finance_dynamic counter meta mark set 0x0c03" in rendered
     assert 'meta mark 0x0c03 oifname != "oc-finance" counter drop' in rendered
     assert (
         f"ip saddr {config.server.ipv4_network} meta mark 0x0c03 "
@@ -694,8 +845,8 @@ def test_two_targeted_profiles_get_distinct_fwmarks_and_tables(tmp_path: Path) -
 
     rendered = NftablesConfigRenderer().render(config)
 
-    assert "ip daddr @split_v4_a counter meta mark set 0x0c02" in rendered
-    assert "ip daddr @split_v4_b counter meta mark set 0x0c03" in rendered
+    assert "ip daddr @split_v4_a_static counter meta mark set 0x0c02" in rendered
+    assert "ip daddr @split_v4_b_static counter meta mark set 0x0c03" in rendered
     assert 'meta mark 0x0c02 oifname != "oc-a" counter drop' in rendered
     assert 'meta mark 0x0c03 oifname != "oc-b" counter drop' in rendered
 
@@ -812,11 +963,15 @@ def test_profile_host_routing_gets_its_own_set_marking_and_killswitch(tmp_path: 
     rendered = NftablesConfigRenderer().render(config)
 
     # finance is the 1st (only) profile -> offset 1 -> fwmark 0x0c02.
-    assert "set host_v4_finance" in rendered
+    assert "set host_v4_finance_static" in rendered
     assert "10.90.0.0/16" in rendered
     assert (
         f"ct direction original ip daddr != {config.server.ipv4_network} "
-        "ip daddr @host_v4_finance counter meta mark set 0x0c02" in rendered
+        "ip daddr @host_v4_finance_static counter meta mark set 0x0c02" in rendered
+    )
+    assert (
+        f"ct direction original ip daddr != {config.server.ipv4_network} "
+        "ip daddr @host_v4_finance_dynamic counter meta mark set 0x0c02" in rendered
     )
     assert 'meta mark 0x0c02 oifname != "oc-finance" counter drop' in rendered
     assert 'meta mark 0x0c02 oifname "oc-finance" counter masquerade' in rendered
@@ -824,7 +979,7 @@ def test_profile_host_routing_gets_its_own_set_marking_and_killswitch(tmp_path: 
     # still declared (every target gets one) but stays empty -- no elements
     # line, so it never actually matches any client traffic.
     assert (
-        "set split_v4_finance {\n    type ipv4_addr\n    flags interval\n    auto-merge\n  }"
+        "set split_v4_finance_static {\n    type ipv4_addr\n    flags interval\n    auto-merge\n  }"
         in rendered
     )
 

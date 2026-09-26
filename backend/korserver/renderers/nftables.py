@@ -78,5 +78,70 @@ class NftablesConfigRenderer(TemplateRenderer):
         }
         return self.render_template("nftables.nft.j2", context)
 
+    def render_static_refresh(
+        self, config: AppConfig, outbound_interface: str | None = None
+    ) -> str:
+        """flush+add script for every target's/host-split's *_static sets --
+        never touches any *_dynamic set. See NftablesService.apply() for when
+        this is used instead of the full table definition from render().
+        """
+        from korserver.services.routing import RoutingService
+
+        targets, _, _ = self.resolve_targets(config, outbound_interface)
+        host_split_active = config.routing.host_traffic and config.routing.host_mode == "split"
+        context: dict[str, Any] = {
+            "filter_table": f"{config.routing.nft_prefix}_filter",
+            "targets": targets,
+            "host_split_active": host_split_active,
+            "host_split_routes": (
+                RoutingService(config).list_host_routes() if host_split_active else []
+            ),
+        }
+        return self.render_template("nftables-static-refresh.nft.j2", context)
+
+    def expected_set_names(
+        self, config: AppConfig, outbound_interface: str | None = None
+    ) -> frozenset[str]:
+        """Every *_static/*_dynamic set name the current config should
+        produce. NftablesService compares this against what the live table
+        actually has to decide whether a surgical static-only refresh is
+        safe (the schema already matches) or a full recreate is required
+        (first apply, or the target list/host-routing toggles changed since
+        the last apply).
+        """
+        targets, _, _ = self.resolve_targets(config, outbound_interface)
+        host_split_active = config.routing.host_traffic and config.routing.host_mode == "split"
+        names: set[str] = set()
+        for target in targets:
+            names.update(
+                {
+                    target.set_v4_static,
+                    target.set_v4_dynamic,
+                    target.set_v6_static,
+                    target.set_v6_dynamic,
+                }
+            )
+            for host_set_name in (
+                target.host_set_v4_static,
+                target.host_set_v4_dynamic,
+                target.host_set_v6_static,
+                target.host_set_v6_dynamic,
+            ):
+                if host_set_name is not None:
+                    names.add(host_set_name)
+        if host_split_active:
+            names.update(
+                {
+                    "host_split_v4_static",
+                    "host_split_v4_dynamic",
+                    "host_split_v6_static",
+                    "host_split_v6_dynamic",
+                }
+            )
+        return frozenset(names)
+
     def target_path(self, config: AppConfig) -> Path:
         return config.generated_path("nftables.nft")
+
+    def static_refresh_path(self, config: AppConfig) -> Path:
+        return config.generated_path("nftables-static-refresh.nft")
