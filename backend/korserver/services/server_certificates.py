@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from korserver.config.models import AppConfig
+from korserver.services.cert_pin import certificate_file_pin
 from korserver.services.command import CommandResult, CommandRunner
 from korserver.services.files import FileManager
 
@@ -67,6 +68,17 @@ class ServerCertificateService:
             },
             "certbot_available": shutil.which("certbot") is not None,
         }
+
+    def server_pin(self) -> dict[str, str]:
+        """Pin of the certificate ocserv serves, for other openconnect clients.
+
+        What a remote korserver (or any openconnect) puts in its upstream
+        profile's server_cert_pin / --servercert to trust this server.
+        """
+        path = self.active_paths().server_cert
+        if not path.exists():
+            raise ValueError(f"server certificate not found: {path}")
+        return {"path": str(path), **certificate_file_pin(path).as_dict()}
 
     def active_paths(self) -> ServerCertificatePaths:
         certs = self.config.certificates

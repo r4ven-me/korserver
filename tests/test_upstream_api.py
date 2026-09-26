@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
 import yaml
 from fastapi.testclient import TestClient
 
@@ -721,3 +722,50 @@ def test_profile_routing_offset_rejects_collisions(tmp_path: Path) -> None:
     assert response.status_code >= 400
     saved = yaml.safe_load(config_path.read_text(encoding="utf-8"))
     assert saved["upstream"]["profiles"][1].get("routing_offset") is None
+
+
+def test_fetch_pin_returns_the_presented_certificate_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from korserver.api import routes_upstream
+    from korserver.services.cert_pin import CertificatePin
+
+    calls: list[tuple[str, int]] = []
+
+    def fake_fetch(host: str, port: int) -> CertificatePin:
+        calls.append((host, port))
+        return CertificatePin(pin="pin-sha256:REMOTE", sha256="sha256:ab")
+
+    monkeypatch.setattr(routes_upstream, "fetch_server_pin", fake_fetch)
+    client = _client(tmp_path / "config.yaml", tmp_path)
+
+    response = client.post(
+        "/api/upstream/fetch-pin",
+        auth=("admin", "secret"),
+        json={"server": " vpn.example.com ", "port": 8443},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"pin": "pin-sha256:REMOTE", "sha256": "sha256:ab"}
+    assert calls == [("vpn.example.com", 8443)]
+
+
+def test_fetch_pin_unreachable_server_is_a_client_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from korserver.api import routes_upstream
+
+    def refuse(host: str, port: int) -> None:
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr(routes_upstream, "fetch_server_pin", refuse)
+    client = _client(tmp_path / "config.yaml", tmp_path)
+
+    response = client.post(
+        "/api/upstream/fetch-pin",
+        auth=("admin", "secret"),
+        json={"server": "vpn.example.com"},
+    )
+
+    assert response.status_code == 400
+    assert "connection refused" in response.json()["detail"]

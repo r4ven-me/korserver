@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
 from korserver.config.models import AppConfig, UpstreamProfileConfig
+from korserver.services.cert_pin import fetch_server_pin
 from korserver.services.secrets import is_secret_key
 from korserver.services.upstream import UpstreamService
 
@@ -44,6 +45,11 @@ class UpstreamSettingsRequest(BaseModel):
     check_settle_seconds: int | None = None
     failover: bool | None = None
     connect_on_boot: bool | None = None
+
+
+class FetchPinRequest(BaseModel):
+    server: str = Field(min_length=1)
+    port: int = Field(default=443, ge=1, le=65535)
 
 
 class UpstreamProfileRequest(BaseModel):
@@ -147,6 +153,23 @@ def save_settings(
         "written": written,
         "upstream": upstream_data,
     }
+
+
+@router.post("/fetch-pin")
+def fetch_pin(payload: FetchPinRequest) -> dict[str, str]:
+    """Show the pin of the certificate an upstream server presents right now.
+
+    RUNTIME: connects to the server. The certificate is NOT verified -- the
+    admin compares the pin with the one the upstream shows for itself
+    before saving it as server_cert_pin.
+    """
+    try:
+        pin = fetch_server_pin(payload.server.strip(), payload.port)
+    except OSError as exc:
+        raise ValueError(
+            f"could not read the certificate of {payload.server}:{payload.port}: {exc}"
+        ) from exc
+    return pin.as_dict()
 
 
 @router.post("/profiles")

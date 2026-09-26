@@ -1,13 +1,14 @@
-import { Ban, CheckCircle2, Eye, Power, RefreshCw, Save, Upload } from "lucide-react";
+import { Ban, CheckCircle2, Eye, Fingerprint, Power, RefreshCw, Save, Upload } from "lucide-react";
 import type { FormEvent } from "react";
 import type { CommandOutput } from "../../app/types";
 import { LastCommandPanel } from "../../components/CommandOutput";
 import { FilePicker } from "../../components/FilePicker";
 import { SettingsTabs } from "../../components/SettingsTabs";
+import { CopyField } from "../../components/CopyField";
 import { ActionButton, EmptyState, Pill } from "../../components/ui";
 import { splitLines } from "../../lib/drafts";
 import { AuthorityPathsView, CertificatePathsView } from "./CertificatePaths";
-import type { CertificateStatus, IntervalUnit } from "../../api";
+import type { CertificatePin, CertificateStatus, IntervalUnit } from "../../api";
 
 export function CertificatesView({
   status,
@@ -34,9 +35,13 @@ export function CertificatesView({
   onRegenerateCa,
   onUploadCa,
   onRevokeCaCert,
-  onShowRevokedCerts
+  onShowRevokedCerts,
+  serverPin,
+  onShowServerPin
 }: {
   status: CertificateStatus | null;
+  serverPin: CertificatePin | null;
+  onShowServerPin: () => void;
   externalFiles: { serverCert: File | null; serverKey: File | null; caCert: File | null };
   caFiles: { caCert: File | null; caKey: File | null };
   caRevokeDraft: { certificateB64: string; certificateFile: File | null };
@@ -278,6 +283,30 @@ export function CertificatesView({
         ) : (
           <EmptyState text="No status" />
         )}
+        <div className="pin-panel">
+          <div className="toolbar">
+            <ActionButton
+              label="Show connection pin"
+              icon={Fingerprint}
+              busy={busy === "server-pin"}
+              disabled={!activeReady}
+              title="Pin other OpenConnect clients use to trust this server's certificate"
+              onClick={onShowServerPin}
+            />
+          </div>
+          {serverPin && (
+            <>
+              <CopyField label="Server certificate pin" value={serverPin.pin} />
+              <CopyField label="SHA-256 fingerprint" value={serverPin.sha256} />
+              <p className="muted-line">
+                On another Korvus Server, paste the pin into the upstream profile's
+                "Server cert pin" field (openconnect: --servercert). The pin follows the
+                key, so it survives a certificate renewal that keeps the same key; the
+                fingerprint changes with every new certificate.
+              </p>
+            </>
+          )}
+        </div>
       </section>
 
       <section className="panel">

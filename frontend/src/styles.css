@@ -2156,3 +2156,50 @@ code {
     opacity: 1;
   }
 }
+
+.copy-field-row,
+.field-with-action {
+  color: inherit;
+  font-size: inherit;
+  font-weight: inherit;
+  margin-bottom: 0;
+}
+
+.copy-field-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.copy-field-row input {
+  flex: 1;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.pin-panel {
+  display: grid;
+  gap: 12px;
+  margin-top: 12px;
+}
+
+.field-with-action {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-with-action input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* `label span` styles field captions; buttons nested in a label keep their own. */
+label .action-button span,
+label .icon-button span {
+  color: inherit;
+  display: inline;
+  font-size: inherit;
+  font-weight: inherit;
+  margin-bottom: 0;
+}

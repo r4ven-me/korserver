@@ -374,6 +374,7 @@ export function App() {
             onDraftChange={upstream.setUpstreamDraft}
             onClose={upstream.closeProfileDialog}
             onSave={upstream.saveProfile}
+            onFetchPin={() => void upstream.fetchDraftServerPin()}
           />
         )}
         {upstream.settingsModalOpen && (
@@ -449,6 +450,8 @@ export function App() {
             onUploadCa={certificates.uploadCa}
             onRevokeCaCert={certificates.revokeCaCert}
             onShowRevokedCerts={certificates.showRevokedCerts}
+            serverPin={certificates.serverPin}
+            onShowServerPin={() => void certificates.showServerPin()}
           />
         )}
 

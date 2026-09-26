@@ -219,6 +219,15 @@ export async function mockApi(page: Page, options: MockOptions = {}) {
       "/api/upstream/settings": { status: "ok" },
       "/api/upstream/profiles": { status: "ok" },
       "/api/upstream/connect": commandResult,
+      "/api/upstream/fetch-pin": {
+        pin: "pin-sha256:UPSTREAMpin0000000000000000000000000000000=",
+        sha256: "sha256:00"
+      },
+      "/api/certificates/server-pin": {
+        path: "/var/lib/korserver/certs/server.crt",
+        pin: "pin-sha256:THISserverPin00000000000000000000000000000=",
+        sha256: "sha256:ab"
+      },
       "/api/upstream/disconnect": commandResult,
       "/api/identity": {
         auth: {

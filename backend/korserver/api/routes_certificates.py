@@ -89,6 +89,12 @@ def raise_command_http_error(exc: CommandError) -> NoReturn:
     raise HTTPException(status_code=400, detail=command_error_detail(exc.result)) from exc
 
 
+@router.get("/server-pin")
+def server_certificate_pin(request: Request) -> dict[str, str]:
+    config: AppConfig = request.app.state.config
+    return ServerCertificateService(config).server_pin()
+
+
 @router.get("")
 def status(request: Request) -> dict[str, object]:
     config: AppConfig = request.app.state.config
