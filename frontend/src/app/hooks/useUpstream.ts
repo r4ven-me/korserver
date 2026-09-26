@@ -6,6 +6,7 @@ import {
   deleteUpstreamProfile,
   disconnectUpstreamProfile,
   fetchUpstreamProfiles,
+  fetchUpstreamServerPin,
   fetchUpstreamStatus,
   saveUpstreamProfile,
   saveUpstreamSettings,
@@ -223,6 +224,33 @@ export function useUpstream(
     recordCommand("upstream", result);
   };
 
+  // Reads the certificate the draft's server presents (unverified) and, once
+  // the admin confirms it matches what that server shows for itself, pins it.
+  const fetchDraftServerPin = async () => {
+    const server = upstreamDraft.server.trim();
+    const port = Number(upstreamDraft.port) || 443;
+    if (!server) {
+      core.setNotice({ kind: "error", text: "enter the server address first" });
+      return;
+    }
+    const result = await runAction(
+      "upstream-fetch-pin",
+      `Certificate pin read from ${server}:${port}`,
+      (token) => fetchUpstreamServerPin(token, server, port),
+      { reload: false }
+    );
+    if (
+      result &&
+      confirmAction(
+        `${server}:${port} presented this certificate:\n\n${result.pin}\n\n` +
+          "Compare it with the pin that server shows for itself (on a korserver: " +
+          "Config → Certificates → Show connection pin). Pin this certificate?"
+      )
+    ) {
+      setUpstreamDraft((current) => ({ ...current, server_cert_pin: result.pin }));
+    }
+  };
+
   const openSettings = () => {
     setCheckHost(activeProfile()?.check_host ?? "");
     setSettingsModalOpen(true);
@@ -269,6 +297,7 @@ export function useUpstream(
     connectProfile,
     disconnectProfile,
     openSettings,
-    submitSettings
+    submitSettings,
+    fetchDraftServerPin
   };
 }

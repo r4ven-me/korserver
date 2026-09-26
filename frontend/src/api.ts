@@ -1150,6 +1150,17 @@ export function fetchUpstreamProfiles(token: string): Promise<UpstreamProfile[]>
   return requestJson<UpstreamProfile[]>("/api/upstream", token);
 }
 
+export function fetchUpstreamServerPin(
+  token: string,
+  server: string,
+  port: number
+): Promise<CertificatePin> {
+  return requestJson<CertificatePin>("/api/upstream/fetch-pin", token, {
+    method: "POST",
+    body: body({ server, port })
+  });
+}
+
 export function switchUpstream(token: string, profile: string): Promise<{ status: string }> {
   return requestJson<{ status: string }>("/api/upstream/switch", token, {
     method: "POST",
@@ -1455,6 +1466,18 @@ export function runLogRotation(
 
 export function fetchCertificateStatus(token: string): Promise<CertificateStatus> {
   return requestJson<CertificateStatus>("/api/certificates", token);
+}
+
+// Pin in the format openconnect's --servercert accepts (see
+// backend/korserver/services/cert_pin.py).
+export type CertificatePin = {
+  pin: string;
+  sha256: string;
+  path?: string;
+};
+
+export function fetchServerCertificatePin(token: string): Promise<CertificatePin> {
+  return requestJson<CertificatePin>("/api/certificates/server-pin", token);
 }
 
 export function uploadExternalCertificates(

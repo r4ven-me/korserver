@@ -20,6 +20,7 @@ from korserver.config.loader import (
     resolve_secret_refs,
 )
 from korserver.config.models import AppConfig, GroupPolicyConfig, OidcProviderConfig
+from korserver.services.cert_pin import fetch_server_pin
 from korserver.services.certificates import CertificateService
 from korserver.services.command import CommandResult
 from korserver.services.config import ConfigService
@@ -232,6 +233,12 @@ def server_cert_status() -> None:
     typer.echo(
         json.dumps(ServerCertificateService(get_config()).status(), indent=2, sort_keys=True)
     )
+
+
+@server_cert_app.command("pin")
+def server_cert_pin() -> None:
+    """Print the pin other openconnect clients use to trust this server."""
+    typer.echo(json.dumps(ServerCertificateService(get_config()).server_pin(), indent=2))
 
 
 @server_cert_app.command("external")
@@ -508,6 +515,15 @@ def sessions_kick(
 def upstream_status() -> None:
     status = UpstreamService(get_config()).status()
     typer.echo(json.dumps(status.__dict__, indent=2, sort_keys=True))
+
+
+@upstream_app.command("fetch-pin")
+def upstream_fetch_pin(
+    server: str,
+    port: int = typer.Option(443, "--port", min=1, max=65535),
+) -> None:
+    """Show the pin of the certificate an upstream server presents (not verified)."""
+    typer.echo(json.dumps(fetch_server_pin(server, port).as_dict(), indent=2))
 
 
 @upstream_app.command("list")

@@ -1614,3 +1614,81 @@ def test_watchdog_respects_connect_on_boot_until_first_connection(
         cli.upstream_watch(once=False)
 
     assert len(recover_calls) == 1
+
+
+def _service(tmp_path: Path) -> UpstreamService:
+    return UpstreamService(_config(tmp_path))
+
+
+def test_openconnect_argv_never_uses_removed_no_cert_check(tmp_path: Path) -> None:
+    # openconnect removed --no-cert-check; passing it makes every connect fail.
+    profile = _profile().model_copy(update={"trusted_cert": True})
+
+    argv = _service(tmp_path).openconnect_argv(profile, accepted_pin="pin-sha256:AAAA")
+
+    assert "--no-cert-check" not in argv
+    assert argv[argv.index("--servercert") + 1] == "pin-sha256:AAAA"
+
+
+def test_explicit_server_cert_pin_wins_over_accepted_pin(tmp_path: Path) -> None:
+    profile = _profile().model_copy(
+        update={"trusted_cert": True, "server_cert_pin": "pin-sha256:PINNED"}
+    )
+
+    argv = _service(tmp_path).openconnect_argv(profile, accepted_pin="pin-sha256:OTHER")
+
+    assert argv[argv.index("--servercert") + 1] == "pin-sha256:PINNED"
+    assert argv.count("--servercert") == 1
+
+
+def test_trusted_cert_accepts_the_certificate_the_server_presents(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from korserver.services.cert_pin import CertificatePin
+
+    fetched: list[tuple[str, int]] = []
+
+    def fake_fetch(host: str, port: int) -> CertificatePin:
+        fetched.append((host, port))
+        return CertificatePin(pin="pin-sha256:FETCHED", sha256="sha256:00")
+
+    monkeypatch.setattr(upstream_module, "fetch_server_pin", fake_fetch)
+    profile = _profile().model_copy(update={"trusted_cert": True, "port": "8443"})
+
+    pin = _service(tmp_path)._accepted_server_pin(profile, dry_run=False)
+
+    assert pin == "pin-sha256:FETCHED"
+    assert fetched == [("vpn.example.com", 8443)]
+
+
+def test_accepted_pin_is_not_fetched_without_trusted_cert_or_with_a_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail_fetch(host: str, port: int) -> None:
+        raise AssertionError("must not touch the network")
+
+    monkeypatch.setattr(upstream_module, "fetch_server_pin", fail_fetch)
+    service = _service(tmp_path)
+
+    assert service._accepted_server_pin(_profile(), dry_run=False) is None
+    pinned = _profile().model_copy(
+        update={"trusted_cert": True, "server_cert_pin": "pin-sha256:X"}
+    )
+    assert service._accepted_server_pin(pinned, dry_run=False) is None
+    trusted = _profile().model_copy(update={"trusted_cert": True})
+    assert service._accepted_server_pin(trusted, dry_run=True) is not None
+
+
+def test_unreachable_server_certificate_is_a_command_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(host: str, port: int) -> None:
+        raise ConnectionRefusedError("connection refused")
+
+    monkeypatch.setattr(upstream_module, "fetch_server_pin", refuse)
+    profile = _profile().model_copy(update={"trusted_cert": True})
+
+    with pytest.raises(CommandError) as excinfo:
+        _service(tmp_path)._accepted_server_pin(profile, dry_run=False)
+
+    assert "connection refused" in excinfo.value.result.stderr

@@ -14,6 +14,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from korserver.config.models import AppConfig, UpstreamProfileConfig
+from korserver.services.cert_pin import fetch_server_pin
 from korserver.services.command import CommandError, CommandResult, CommandRunner
 from korserver.services.files import FileManager
 from korserver.services.nftables import NftablesService
@@ -345,7 +346,15 @@ class UpstreamService:
             self.files.atomic_write_bytes(key_path, base64.b64decode(profile.key_file_base64))
         return cert_path, key_path
 
-    def openconnect_argv(self, profile: UpstreamProfileConfig) -> list[str]:
+    def openconnect_argv(
+        self, profile: UpstreamProfileConfig, *, accepted_pin: str | None = None
+    ) -> list[str]:
+        """argv for dialing `profile`.
+
+        `accepted_pin` is the pin of whatever certificate the server just
+        presented, used for trusted_cert profiles without an explicit
+        server_cert_pin (see _accepted_server_pin()).
+        """
         server = f"{profile.server}:{profile.port}"
         if profile.camouflage_secret:
             server = f"{server}/?{profile.camouflage_secret}"
@@ -365,10 +374,11 @@ class UpstreamService:
         # network_mode: host that hijacks the host itself. Use the minimal
         # interface-only script instead.
         argv.append(f"--script={self._ensure_vpnc_script()}")
-        if profile.trusted_cert:
-            argv.append("--no-cert-check")
-        if profile.server_cert_pin:
-            argv.extend(["--servercert", profile.server_cert_pin])
+        # openconnect dropped --no-cert-check; a certificate that isn't
+        # CA-trusted can only be accepted by pinning it.
+        pin = profile.server_cert_pin or accepted_pin
+        if pin:
+            argv.extend(["--servercert", pin])
         if profile.auth_type == "password":
             argv.append("--passwd-on-stdin")
             if profile.username:
@@ -383,6 +393,40 @@ class UpstreamService:
                     argv.append(f"--key-password={profile.cert_pass}")
         argv.append(server)
         return argv
+
+    def _accepted_server_pin(
+        self, profile: UpstreamProfileConfig, *, dry_run: bool
+    ) -> str | None:
+        """Pin for a trusted_cert ("no cert check") profile. RUNTIME: network.
+
+        Accepts whatever certificate the server presents right now, which is
+        what --no-cert-check used to do -- still no protection against a
+        man-in-the-middle. An explicit server_cert_pin always wins.
+        """
+        if not profile.trusted_cert or profile.server_cert_pin:
+            return None
+        if dry_run:
+            return "pin-sha256:<fetched-from-server-at-connect>"
+        try:
+            pin = fetch_server_pin(profile.server, int(profile.port)).pin
+        except (OSError, ValueError) as exc:
+            raise CommandError(
+                CommandResult(
+                    argv=("openconnect", profile.server),
+                    returncode=1,
+                    stdout="",
+                    stderr=(
+                        f"could not read the server certificate of "
+                        f"{profile.server}:{profile.port} to accept it: {exc}"
+                    ),
+                )
+            ) from exc
+        self._append_log(
+            f"profile '{profile.name}': certificate check disabled, accepting the "
+            f"certificate the server presented ({pin}); set server_cert_pin to it "
+            "to stop trusting whatever the server presents"
+        )
+        return pin
 
     def _ensure_vpnc_script(self) -> Path:
         """Install the interface-only vpnc-script into generated_dir.
@@ -471,8 +515,9 @@ class UpstreamService:
                 # connecting. Rules always point at the ACTIVE profile's
                 # interface, even when dialing a standby.
                 self.nftables.apply(outbound_interface=self.active_interface())
+            accepted_pin = self._accepted_server_pin(profile, dry_run=dry_run)
             result = self.runner.run(
-                self.openconnect_argv(profile),
+                self.openconnect_argv(profile, accepted_pin=accepted_pin),
                 input_text=f"{profile.password}\n" if profile.password else None,
                 timeout=60,
                 graceful_timeout=5,

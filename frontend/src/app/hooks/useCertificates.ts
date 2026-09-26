@@ -1,7 +1,9 @@
 import { type FormEvent, useState } from "react";
 import {
+  type CertificatePin,
   type IntervalUnit,
   fetchRevokedCertificates,
+  fetchServerCertificatePin,
   issueLetsEncryptCertificate,
   regenerateCa,
   renewLetsEncryptCertificate,
@@ -49,6 +51,7 @@ export function useCertificates(core: PanelCore) {
     http01Port: 80
   });
   const [revokedCertsModal, setRevokedCertsModal] = useState<RevokedCertsModalState>(null);
+  const [serverPin, setServerPin] = useState<CertificatePin | null>(null);
 
   core.registerHydrator("certificates", ({ certificateStatus: status }) => {
     if (!status) {
@@ -239,6 +242,18 @@ export function useCertificates(core: PanelCore) {
     }
   };
 
+  // Pin other openconnect clients (an upstream profile on another korserver)
+  // use to trust this server's certificate.
+  const showServerPin = async () => {
+    const result = await runAction(
+      "server-pin",
+      "Server certificate pin loaded",
+      fetchServerCertificatePin,
+      { reload: false }
+    );
+    setServerPin(result);
+  };
+
   const showRevokedCerts = async () => {
     setRevokedCertsModal({ loading: true, certificates: [] });
     if (!authToken) {
@@ -275,6 +290,8 @@ export function useCertificates(core: PanelCore) {
     regenerateCa: regenerateCaAction,
     uploadCa: uploadCaAction,
     revokeCaCert,
-    showRevokedCerts
+    showRevokedCerts,
+    serverPin,
+    showServerPin
   };
 }

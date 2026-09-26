@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from korserver.api.app import create_app
 
 
-def _client(config_path: Path, tmp_path: Path) -> TestClient:
+def _client(config_path: Path, tmp_path: Path, extra: str = "") -> TestClient:
     config_path.write_text(
         f"""
 system:
@@ -24,7 +24,7 @@ web:
 auth:
   password:
     enabled: true
-""",
+{extra}""",
         encoding="utf-8",
     )
     return TestClient(create_app(config_path=config_path))
@@ -179,3 +179,33 @@ def test_list_revoked_certificates_after_revoke(tmp_path: Path) -> None:
     assert len(certificates) == 1
     assert certificates[0]["subject"] == "CN=alice"
     assert certificates[0]["serial"]
+
+
+def test_server_pin_reports_the_active_certificate_pin(tmp_path: Path) -> None:
+    fixtures = Path(__file__).parent / "fixtures"
+    client = _client(
+        tmp_path / "config.yaml",
+        tmp_path,
+        extra=f"""
+certificates:
+  mode: external
+  server_cert: {fixtures / "test-server.pem"}
+  server_key: {fixtures / "test-server.key"}
+  ca_cert: {fixtures / "test-server.pem"}
+""",
+    )
+
+    response = client.get("/api/certificates/server-pin", auth=("admin", "secret"))
+
+    assert response.status_code == 200
+    assert response.json()["pin"] == "pin-sha256:bkNrvtXA+3ZD7n3iUJDkGuRZhhmQmhE6xv92QL3QRDc="
+    assert response.json()["sha256"].startswith("sha256:")
+
+
+def test_server_pin_without_a_certificate_is_a_client_error(tmp_path: Path) -> None:
+    client = _client(tmp_path / "config.yaml", tmp_path)
+
+    response = client.get("/api/certificates/server-pin", auth=("admin", "secret"))
+
+    assert response.status_code == 400
+    assert "server certificate not found" in response.json()["detail"]

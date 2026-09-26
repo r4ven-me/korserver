@@ -141,7 +141,9 @@ upstream:
       # this server's own side. Optional -- omit for a plain upstream.
       camouflage_secret: "${SECRET:PRIVATE_MAIN_CAMOUFLAGE_SECRET}"
       auth_type: p12 # password | cert | p12
-      trusted_cert: true
+      # The upstream's certificate isn't CA-signed (another Korvus Server with
+      # its own CA), so pin it -- see "Trusting the upstream certificate".
+      server_cert_pin: "pin-sha256:<pin shown by the upstream>"
       cert_file: /var/lib/korserver/secrets/private-main.p12
       # Alternative to cert_file/key_file: paste the file itself, Base64-encoded,
       # so it never has to exist on disk outside korserver's own secrets_dir:

@@ -2,7 +2,21 @@
 
 ## [Unreleased]
 
+### Added
+
+- "Show connection pin" on Config → Certificates → Server certificate, plus
+  `korctl server cert pin`: the `pin-sha256:` other OpenConnect clients (an upstream profile
+  on another korserver) use to trust this server's certificate.
+- "Fetch" next to an upstream profile's *Server cert pin*, plus
+  `korctl upstream fetch-pin HOST`: reads the certificate the upstream presents and pins it
+  after the admin confirms it.
+
 ### Fixed
+
+- Upstream profiles with *No cert check* (`trusted_cert`) failed to connect: openconnect
+  removed `--no-cert-check`. korserver now reads the certificate the server presents and
+  passes its pin via `--servercert`, the same trust-anything behavior as before. An
+  explicit `server_cert_pin` always wins and is the recommended setting.
 
 - Editing an upstream profile from the panel no longer moves it to the end of
   `upstream.profiles`. Tunnel interfaces and fwmark/table offsets are derived from list

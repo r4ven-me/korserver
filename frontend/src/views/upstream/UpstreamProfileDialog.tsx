@@ -1,7 +1,7 @@
-import { Save, X } from "lucide-react";
+import { Fingerprint, Save, X } from "lucide-react";
 import { type FormEvent, useState } from "react";
 import { CertSourceField, type CertSourceMode } from "../../components/CertSourceField";
-import { IconButton } from "../../components/ui";
+import { ActionButton, IconButton } from "../../components/ui";
 import type { UpstreamProfileDraft } from "../../api";
 
 export function UpstreamProfileDialog({
@@ -10,7 +10,8 @@ export function UpstreamProfileDialog({
   busy,
   onDraftChange,
   onClose,
-  onSave
+  onSave,
+  onFetchPin
 }: {
   draft: UpstreamProfileDraft;
   // Fixed by the caller when the dialog opens (create vs. edit an existing
@@ -22,6 +23,7 @@ export function UpstreamProfileDialog({
   onDraftChange: (value: UpstreamProfileDraft) => void;
   onClose: () => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
+  onFetchPin: () => void;
 }) {
   const [certMode, setCertMode] = useState<CertSourceMode>(draft.cert_file ? "path" : "base64");
   const [keyMode, setKeyMode] = useState<CertSourceMode>(draft.key_file ? "path" : "base64");
@@ -200,14 +202,30 @@ export function UpstreamProfileDialog({
               </label>
             </>
           )}
-          <label>
-            <span>Server cert pin</span>
-            <input
-              value={draft.server_cert_pin}
-              onChange={(event) => onDraftChange({ ...draft, server_cert_pin: event.target.value })}
-              placeholder="pin-sha256:..."
-            />
-          </label>
+          <div
+            className="field-label"
+            title="Trust exactly this server certificate (openconnect --servercert). Needed when the upstream's certificate isn't signed by a public CA, e.g. another Korvus Server with its own CA."
+          >
+            <span id="upstream-server-cert-pin-label">Server cert pin</span>
+            <div className="field-with-action">
+              <input
+                aria-labelledby="upstream-server-cert-pin-label"
+                value={draft.server_cert_pin}
+                onChange={(event) =>
+                  onDraftChange({ ...draft, server_cert_pin: event.target.value })
+                }
+                placeholder="pin-sha256:..."
+              />
+              <ActionButton
+                label="Fetch"
+                icon={Fingerprint}
+                busy={busy === "upstream-fetch-pin"}
+                disabled={!draft.server.trim()}
+                title="Read the certificate the server presents and pin it after you confirm"
+                onClick={onFetchPin}
+              />
+            </div>
+          </div>
           <label title="Optional: only if the upstream ocserv server has camouflage enabled">
             <span>Camouflage secret</span>
             <input
@@ -293,7 +311,10 @@ export function UpstreamProfileDialog({
             )}
           </div>
           <div className="profile-status-switches">
-          <label className="switch" title="Skip upstream certificate verification">
+          <label
+            className="switch"
+            title="Accept whatever certificate the server presents at each connect (it is pinned automatically, since openconnect no longer has --no-cert-check). Insecure: prefer 'Server cert pin'. Ignored when a pin is set."
+          >
             <input
               checked={draft.trusted_cert}
               onChange={(event) => onDraftChange({ ...draft, trusted_cert: event.target.checked })}

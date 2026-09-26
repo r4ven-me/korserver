@@ -191,3 +191,56 @@ test("dashboard reload/restart and Upstream settings use hydrated values", async
     check_threshold: 4
   });
 });
+
+test("certificates page shows the connection pin other servers use to trust this one", async ({
+  page
+}) => {
+  await mockApi(page);
+  await signIn(page);
+
+  await openConfigSection(page, "Certificates");
+  await page.getByRole("tab", { name: "Server certificate", exact: true }).click();
+  await page.getByRole("button", { name: "Show connection pin", exact: true }).click();
+
+  await expect(page.getByLabel("Server certificate pin")).toHaveValue(
+    "pin-sha256:THISserverPin00000000000000000000000000000="
+  );
+  await expect(page.getByLabel("SHA-256 fingerprint")).toHaveValue("sha256:ab");
+});
+
+test("upstream profile can fetch and pin the server certificate after confirmation", async ({
+  page
+}) => {
+  const mutations: Mutations = [];
+  await mockApi(page, { mutations });
+  const prompts: string[] = [];
+  page.on("dialog", (dialog) => {
+    prompts.push(dialog.message());
+    void dialog.accept();
+  });
+  await signIn(page);
+
+  await openConfigSection(page, "Upstream");
+  await page.getByRole("button", { name: "Create profile", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByLabel("Name", { exact: true }).fill("remote");
+  await dialog.getByLabel("Server", { exact: true }).fill("vpn.example.com");
+  await dialog.getByRole("button", { name: "Fetch", exact: true }).click();
+
+  expect(await mutationBody(mutations, "/api/upstream/fetch-pin")).toEqual({
+    server: "vpn.example.com",
+    port: 443
+  });
+  await expect(dialog.getByLabel("Server cert pin", { exact: true })).toHaveValue(
+    "pin-sha256:UPSTREAMpin0000000000000000000000000000000="
+  );
+  expect(prompts.some((text) => text.includes("pin-sha256:UPSTREAMpin"))).toBe(true);
+
+  await dialog.getByLabel("Username", { exact: true }).fill("user");
+  await dialog.getByLabel("Password", { exact: true }).fill("secret");
+  await dialog.getByRole("button", { name: "Save profile", exact: true }).click();
+  expect(await mutationBody(mutations, "/api/upstream/profiles")).toMatchObject({
+    name: "remote",
+    server_cert_pin: "pin-sha256:UPSTREAMpin0000000000000000000000000000000="
+  });
+});

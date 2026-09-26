@@ -441,7 +441,9 @@ upstream:
       # this server's own side. Optional -- omit for a plain upstream.
       camouflage_secret: "${SECRET:PRIVATE_MAIN_CAMOUFLAGE_SECRET}"
       auth_type: p12 # password | cert | p12
-      trusted_cert: true
+      # The upstream's certificate isn't CA-signed (another Korvus Server with
+      # its own CA), so pin it -- see "Trusting the upstream certificate".
+      server_cert_pin: "pin-sha256:<pin shown by the upstream>"
       cert_file: /var/lib/korserver/secrets/private-main.p12
       # Alternative to cert_file/key_file: paste the file itself, Base64-encoded,
       # so it never has to exist on disk outside korserver's own secrets_dir:
@@ -1103,6 +1105,28 @@ Put the secret in `.env`:
 ```env
 PRIVATE_MAIN_PASSWORD=change-me
 ```
+
+### Trusting the upstream certificate
+
+`openconnect` only accepts an upstream certificate signed by a trusted public CA. The
+old `--no-cert-check` switch was removed from openconnect. So when the upstream uses
+its own CA (for example another Korvus Server in `auto` certificate mode), pin its
+certificate in the profile's `server_cert_pin`. It is passed as `--servercert`:
+
+1. On the **upstream** server, open Config → Certificates → *Server certificate* and
+   click **Show connection pin**, or run `korctl server cert pin`. Copy the
+   `pin-sha256:...` value.
+2. On **this** server, paste it into the upstream profile's *Server cert pin* field.
+   Or click **Fetch** next to that field (`korctl upstream fetch-pin HOST --port PORT`):
+   it reads the certificate the upstream presents right now and asks you to confirm.
+   Before accepting, compare the pin with the one from step 1.
+
+The pin covers the certificate's public key. It stays valid across renewals that keep
+the same key (korserver's auto mode does). Regenerating the key means updating the pin.
+
+*No cert check* (`trusted_cert: true`) still exists but is only a fallback. At every
+connect it accepts and pins whatever certificate the server presents, which gives no
+protection against a man-in-the-middle. An explicit `server_cert_pin` always wins.
 
 Check the profiles:
 
