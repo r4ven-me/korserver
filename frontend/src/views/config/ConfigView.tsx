@@ -166,6 +166,11 @@ export function ConfigView({
             <span>OTP</span>
           </label>
         </div>
+        <p className="field-help">
+          Enabled methods are all required at once: with both password and certificate on, clients must
+          present a certificate and a password. Changing the methods restarts ocserv, which disconnects the
+          active VPN sessions.
+        </p>
 
         {authMethodsDraft.otpEnabled && (
           <div className="collapsible-settings-list">

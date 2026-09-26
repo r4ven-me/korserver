@@ -25,6 +25,13 @@
 
 ### Fixed
 
+- Saving authentication methods (Config → Authentication, or the PAM/RADIUS connector)
+  left the running ocserv on the old methods until it was restarted by hand: SIGHUP does not
+  re-read `auth =` lines. Settings saves now restart ocserv when a restart-only directive
+  changes (auth methods, ports, listen address, device) and reload it otherwise.
+- Upstream profiles using a client certificate could not connect to an ocserv that also
+  requires a password (several `auth =` lines are all required): the profile dialog now has
+  optional *Username*/*Password* fields for certificate and PKCS#12 profiles too.
 - Upstream profiles with *No cert check* (`trusted_cert`) failed to connect: openconnect
   removed `--no-cert-check`. korserver now reads the certificate the server presents and
   passes its pin via `--servercert`, the same trust-anything behavior as before. An

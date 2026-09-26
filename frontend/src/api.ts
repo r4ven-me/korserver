@@ -1068,11 +1068,15 @@ export function saveOidcSettings(
     radius_nas_identifier: string | null;
     radius_group_separator: "semicolon" | "comma";
   }
-): Promise<{ status: string; identity: IdentityStatus }> {
-  return requestJson<{ status: string; identity: IdentityStatus }>("/api/identity/oidc/settings", token, {
-    method: "POST",
-    body: body(payload)
-  });
+): Promise<{ status: string; identity: IdentityStatus; reload: CommandResult | null }> {
+  return requestJson<{ status: string; identity: IdentityStatus; reload: CommandResult | null }>(
+    "/api/identity/oidc/settings",
+    token,
+    {
+      method: "POST",
+      body: body(payload)
+    }
+  );
 }
 
 export function saveIdentitySettings(
@@ -1338,8 +1342,8 @@ export type AuthMethodsSettingsPayload = {
 export function saveAuthMethodsSettings(
   token: string,
   payload: AuthMethodsSettingsPayload
-): Promise<{ status: string }> {
-  return requestJson<{ status: string }>("/api/server/auth-settings", token, {
+): Promise<{ status: string; reload: CommandResult | null }> {
+  return requestJson<{ status: string; reload: CommandResult | null }>("/api/server/auth-settings", token, {
     method: "POST",
     body: body(payload)
   });

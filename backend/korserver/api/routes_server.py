@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
 from korserver.config.models import AppConfig, OtpAuthConfig
+from korserver.renderers import OcservConfigRenderer
 from korserver.services.command import CommandResult
 from korserver.services.otp_delivery import OtpDeliveryService
 from korserver.services.server import ServerService
@@ -132,25 +133,39 @@ def command_result(result: CommandResult, argv: tuple[str, ...] | None = None) -
     }
 
 
+def running_ocserv_conf(request: Request) -> str:
+    """ocserv.conf for the config in effect before a settings save."""
+    return OcservConfigRenderer().render(request.app.state.config)
+
+
+def ocserv_apply_result(result: CommandResult | None) -> dict[str, object] | None:
+    if result is None:
+        return None
+    action = "restart" if "restartProcess" in result.argv else "reload"
+    return command_result(result, ("korctl", "server", action))
+
+
 @router.post("/settings")
 def save_server_settings(
     request: Request,
     payload: ServerSettingsRequest,
 ) -> dict[str, object]:
     patch = payload.model_dump(exclude={"reload"})
+    previous = running_ocserv_conf(request)
     loaded_config, written = apply_config_patch(request, {"server": patch})
     # Rewriting ocserv.conf alone does not make the *running* ocserv process
     # pick up the change (e.g. max-same-clients, debug_level) -- without a
     # reload, the server keeps enforcing whatever was last loaded, silently
-    # diverging from what the panel shows as saved.
-    reload_result = ServerService(loaded_config).reload() if payload.reload else None
+    # diverging from what the panel shows as saved. A port/listen/device
+    # change needs a full restart, which apply_config_change picks.
+    reload_result = (
+        ServerService(loaded_config).apply_config_change(previous) if payload.reload else None
+    )
     return {
         "status": "saved",
         "written": written,
         "server": loaded_config.model_dump_safe()["server"],
-        "reload": command_result(reload_result, ("korctl", "server", "reload"))
-        if reload_result
-        else None,
+        "reload": ocserv_apply_result(reload_result),
     }
 
 
@@ -164,11 +179,16 @@ def save_auth_methods_settings(
         "certificate": {"enabled": payload.certificate_enabled},
         "otp": otp_settings_from_payload(payload, request.app.state.config),
     }
+    previous = running_ocserv_conf(request)
     loaded_config, written = apply_config_patch(request, {"auth": patch})
+    # ocserv reads its `auth =` lines only at startup: switching a method on
+    # or off takes a restart, or the running server keeps the old methods.
+    reload_result = ServerService(loaded_config).apply_config_change(previous)
     return {
         "status": "saved",
         "written": written,
         "auth": loaded_config.model_dump_safe()["auth"],
+        "reload": ocserv_apply_result(reload_result),
     }
 
 

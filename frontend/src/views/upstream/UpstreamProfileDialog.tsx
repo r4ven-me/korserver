@@ -99,27 +99,30 @@ export function UpstreamProfileDialog({
               <option value="p12">PKCS#12</option>
             </select>
           </label>
-          {draft.auth_type === "password" && (
-            <>
-              <label>
-                <span>Username</span>
-                <input
-                  value={draft.username}
-                  onChange={(event) => onDraftChange({ ...draft, username: event.target.value })}
-                  required
-                />
-              </label>
-              <label>
-                <span>Password</span>
-                <input
-                  type="password"
-                  value={draft.password}
-                  onChange={(event) => onDraftChange({ ...draft, password: event.target.value })}
-                  required
-                />
-              </label>
-            </>
-          )}
+          <label
+            title={
+              draft.auth_type === "password"
+                ? undefined
+                : "Only if the upstream also asks for a username and password after the certificate (its ocserv combines certificate and password authentication)"
+            }
+          >
+            <span>{draft.auth_type === "password" ? "Username" : "Username (if required)"}</span>
+            <input
+              value={draft.username}
+              onChange={(event) => onDraftChange({ ...draft, username: event.target.value })}
+              required={draft.auth_type === "password"}
+            />
+          </label>
+          <label>
+            <span>{draft.auth_type === "password" ? "Password" : "Password (if required)"}</span>
+            <input
+              type="password"
+              value={draft.password}
+              placeholder={isEdit ? "Blank keeps the saved password" : undefined}
+              onChange={(event) => onDraftChange({ ...draft, password: event.target.value })}
+              required={draft.auth_type === "password" && !isEdit}
+            />
+          </label>
           {draft.auth_type === "cert" && (
             <>
               <CertSourceField

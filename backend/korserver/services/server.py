@@ -4,8 +4,10 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from korserver.config.models import AppConfig
+from korserver.renderers import OcservConfigRenderer
 from korserver.services.command import CommandResult
 from korserver.services.config import ConfigService
+from korserver.services.ocserv_reload import restart_required
 from korserver.services.supervisor_rpc import SupervisorRpcClient, SupervisorRpcError
 
 _NOT_RUNNING_FAULTS = ("NOT_RUNNING", "STOPPED", "already stopped")
@@ -65,6 +67,27 @@ class ServerService:
             self.rpc.start_process("ocserv")
 
         return _run(_restart, "restartProcess", "ocserv")
+
+    def apply_config_change(
+        self,
+        previous_ocserv_conf: str,
+        *,
+        dry_run: bool = False,
+    ) -> CommandResult | None:
+        """Make the running ocserv use the config saved as ``self.config``.
+
+        RUNTIME: talks to supervisord. ``previous_ocserv_conf`` is the
+        ocserv.conf the process was running with. Settings SIGHUP can't
+        apply (auth methods, ports, device) get a full restart, which drops
+        the active VPN sessions; everything else a reload, which keeps them.
+        Returns None when the ocserv server is disabled.
+        """
+        if not self.config.server.enabled:
+            return None
+        current = OcservConfigRenderer().render(self.config)
+        if restart_required(previous_ocserv_conf, current):
+            return self.restart(dry_run=dry_run)
+        return self.reload(dry_run=dry_run)
 
     def status(self) -> CommandResult:
         try:

@@ -1716,3 +1716,36 @@ def test_trusted_cert_follows_a_changed_server_key_and_logs_it(
     log = service.log_file.read_text(encoding="utf-8")
     assert log.count("certificate check disabled") == 1
     assert "pin-sha256:FIRST -> pin-sha256:SECOND" in log
+
+
+def test_certificate_profile_also_sends_username_and_password_when_set(tmp_path: Path) -> None:
+    # An upstream ocserv with `auth = "certificate"` and `auth = "plain[...]"`
+    # requires both, so after the client certificate it asks for a password.
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="p12",
+        cert_file="/etc/korserver/upstream.p12",
+        username="yarchik-net",
+        password="secret",
+    )
+
+    argv = _service(tmp_path).openconnect_argv(profile)
+
+    assert argv[argv.index("--user") + 1] == "yarchik-net"
+    assert "--passwd-on-stdin" in argv
+    assert argv[argv.index("--certificate") + 1] == "/etc/korserver/upstream.p12"
+
+
+def test_certificate_profile_without_password_does_not_read_stdin(tmp_path: Path) -> None:
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="p12",
+        cert_file="/etc/korserver/upstream.p12",
+    )
+
+    argv = _service(tmp_path).openconnect_argv(profile)
+
+    assert "--passwd-on-stdin" not in argv
+    assert "--user" not in argv

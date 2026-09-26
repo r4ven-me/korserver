@@ -379,11 +379,15 @@ class UpstreamService:
         pin = profile.server_cert_pin or accepted_pin
         if pin:
             argv.extend(["--servercert", pin])
-        if profile.auth_type == "password":
+        # Username/password also apply to certificate profiles: an upstream
+        # ocserv with several `auth =` lines (e.g. certificate + plain)
+        # requires all of them, so it asks for a password after accepting
+        # the client certificate.
+        if profile.auth_type == "password" or profile.password:
             argv.append("--passwd-on-stdin")
-            if profile.username:
-                argv.extend(["--user", profile.username])
-        elif profile.auth_type in {"cert", "p12"}:
+        if profile.username:
+            argv.extend(["--user", profile.username])
+        if profile.auth_type in {"cert", "p12"}:
             cert_path, key_path = self._materialize_cert(profile)
             if cert_path:
                 argv.extend(["--certificate", str(cert_path)])

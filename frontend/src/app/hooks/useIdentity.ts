@@ -81,10 +81,8 @@ export function useIdentity(core: PanelCore) {
       })
     );
     if (result !== null) {
-      recordCommand(
-        "identity",
-        syntheticCommand(["korctl", "identity", "oidc", "settings"], "saved")
-      );
+      const saved = syntheticCommand(["korctl", "identity", "oidc", "settings"], "saved");
+      recordCommand("identity", result.reload ? [saved, result.reload] : saved);
     }
   };
 
