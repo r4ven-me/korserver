@@ -154,14 +154,22 @@ class CertificateService:
                 ]
             ),
         )
-        privkey_result = self.runner.run(
-            ["certtool", "--generate-privkey", "--outfile", str(key)],
-            timeout=60,
-            dry_run=dry_run,
-        )
-        self._chmod_private_key(key, dry_run=dry_run)
+        results: list[CommandResult] = []
+        # Keep an existing key: remote openconnect clients pin this server by
+        # its public key (--servercert pin-sha256:...), so re-issuing the
+        # certificate must not rotate the key underneath them. Delete
+        # server.key to rotate it deliberately.
+        if not key.exists():
+            results.append(
+                self.runner.run(
+                    ["certtool", "--generate-privkey", "--outfile", str(key)],
+                    timeout=60,
+                    dry_run=dry_run,
+                )
+            )
+            self._chmod_private_key(key, dry_run=dry_run)
         return [
-            privkey_result,
+            *results,
             self.runner.run(
                 [
                     "certtool",

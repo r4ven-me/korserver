@@ -57,6 +57,7 @@ def test_supervisor_render_adds_certbot_auto_renew(tmp_path: Path) -> None:
 
     assert "[program:certbot-renew]" in rendered
     assert "certbot --config-dir" in rendered
+    assert "renew --reuse-key" in rendered
     assert "sleep 604800" in rendered
 
 

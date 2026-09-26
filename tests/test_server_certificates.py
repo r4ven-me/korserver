@@ -141,3 +141,6 @@ def test_letsencrypt_issue_and_renew_use_custom_http01_address_and_port(tmp_path
     assert renew_argv[renew_argv.index("--http-01-address") + 1] == "203.0.113.5"
     assert renew_argv[renew_argv.index("--http-01-port") + 1] == "8080"
     assert "renew" in renew_argv
+    # Keeping the key keeps this server's openconnect pin stable across renewals.
+    assert "--reuse-key" in issue_argv
+    assert "--reuse-key" in renew_argv

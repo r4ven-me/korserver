@@ -65,7 +65,7 @@ redirect_stderr=true
 
 {% if config.certificates.letsencrypt.enabled and config.certificates.letsencrypt.auto_renew_enabled %}
 [program:certbot-renew]
-command=/bin/sh -c 'while true; do certbot --config-dir {{ config.system.data_dir }}/certbot/config --work-dir {{ config.system.data_dir }}/certbot/work --logs-dir {{ config.system.log_dir }}/certbot renew{% if config.certificates.letsencrypt.renew_reload %} && supervisorctl -c {{ config.system.generated_dir }}/supervisor.conf signal HUP ocserv || true{% endif %}; sleep {{ config.certificates.letsencrypt.auto_renew_interval_seconds }}; done'
+command=/bin/sh -c 'while true; do certbot --config-dir {{ config.system.data_dir }}/certbot/config --work-dir {{ config.system.data_dir }}/certbot/work --logs-dir {{ config.system.log_dir }}/certbot renew --reuse-key{% if config.certificates.letsencrypt.renew_reload %} && supervisorctl -c {{ config.system.generated_dir }}/supervisor.conf signal HUP ocserv || true{% endif %}; sleep {{ config.certificates.letsencrypt.auto_renew_interval_seconds }}; done'
 autorestart=true
 stdout_logfile={{ config.system.log_dir }}/certbot-renew.log
 stdout_logfile_maxbytes=0

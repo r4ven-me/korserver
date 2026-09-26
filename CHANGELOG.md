@@ -11,6 +11,18 @@
   `korctl upstream fetch-pin HOST`: reads the certificate the upstream presents and pins it
   after the admin confirms it.
 
+### Changed
+
+- This server's openconnect pin stays stable across certificate renewals: re-issuing the
+  auto-mode server certificate keeps an existing `server.key`, and certbot issues/renews
+  Let's Encrypt certificates with `--reuse-key` (issue, manual renew and the supervisor
+  auto-renew loop). Delete `server.key` to rotate the key on purpose.
+- *No cert check* on an upstream profile is the documented automatic mode: the certificate
+  the server presents is accepted on every connect, and a changed server key is logged as
+  a warning instead of being accepted silently.
+- The profile dialog's *Server cert pin* field spans the full dialog width, with help text
+  on pinning vs. the automatic mode.
+
 ### Fixed
 
 - Upstream profiles with *No cert check* (`trusted_cert`) failed to connect: openconnect

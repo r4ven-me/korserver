@@ -1121,12 +1121,20 @@ certificate in the profile's `server_cert_pin`. It is passed as `--servercert`:
    it reads the certificate the upstream presents right now and asks you to confirm.
    Before accepting, compare the pin with the one from step 1.
 
-The pin covers the certificate's public key. It stays valid across renewals that keep
-the same key (korserver's auto mode does). Regenerating the key means updating the pin.
+The pin covers the certificate's public key, not the certificate itself, so it stays valid
+across renewals that keep the key. Korvus Server always keeps it: re-issuing the auto-mode
+certificate reuses `server.key`, and Let's Encrypt certificates are issued and renewed with
+certbot `--reuse-key`. The pin only changes when the key is rotated on purpose (delete
+`server.key`, upload other external certificates). Then update the pin on the servers that
+use it.
 
-*No cert check* (`trusted_cert: true`) still exists but is only a fallback. At every
-connect it accepts and pins whatever certificate the server presents, which gives no
-protection against a man-in-the-middle. An explicit `server_cert_pin` always wins.
+**Automatic mode, no pin to maintain.** Leave *Server cert pin* empty and enable
+*No cert check* (`trusted_cert: true`). At every connect, including the watchdog's
+reconnects, korserver reads the certificate the server presents and passes its pin to
+openconnect, so a changed upstream certificate never breaks the connection. If the key
+differs from the last accepted one, a warning is written to the upstream log. The
+trade-off is no protection against a man-in-the-middle on the path to the upstream. An
+explicit `server_cert_pin` always wins over this mode.
 
 Check the profiles:
 

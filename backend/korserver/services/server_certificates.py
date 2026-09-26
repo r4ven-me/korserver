@@ -131,6 +131,9 @@ class ServerCertificateService:
                 "--cert-name",
                 domains[0],
                 "--keep-until-expiring",
+                # Keep the key across renewals so pins of this server
+                # (openconnect --servercert pin-sha256:...) stay valid.
+                "--reuse-key",
                 "--http-01-address",
                 le.http01_address or self.config.server.listen,
                 "--http-01-port",
@@ -148,6 +151,7 @@ class ServerCertificateService:
         argv = [
             *self._certbot_base_argv(),
             "renew",
+            "--reuse-key",
             "--http-01-address",
             le.http01_address or self.config.server.listen,
             "--http-01-port",

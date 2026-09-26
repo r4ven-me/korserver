@@ -348,3 +348,28 @@ def test_list_revoked_certificates_parses_one_entry_per_pem_block(tmp_path: Path
             "not_after": "Thu Feb 02 00:00:00 UTC 2025",
         },
     ]
+
+
+def test_server_certificate_reuses_an_existing_key(tmp_path: Path) -> None:
+    # Remote openconnect clients pin this server by its public key, so
+    # re-issuing the certificate must keep the key.
+    config = _config(tmp_path)
+    key = config.cert_path("server.key")
+    key.parent.mkdir(parents=True, exist_ok=True)
+    key.write_text("existing key", encoding="utf-8")
+    runner = RecordingRunner()
+
+    CertificateService(config, runner=runner).create_server_certificate()
+
+    commands = [call["argv"] for call in runner.calls]
+    assert not any("--generate-privkey" in argv for argv in commands)
+    assert any("--generate-certificate" in argv for argv in commands)
+    assert key.read_text(encoding="utf-8") == "existing key"
+
+
+def test_server_certificate_generates_a_key_when_missing(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+
+    CertificateService(_config(tmp_path), runner=runner).create_server_certificate(dry_run=True)
+
+    assert any("--generate-privkey" in call["argv"] for call in runner.calls)

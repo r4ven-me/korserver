@@ -1692,3 +1692,27 @@ def test_unreachable_server_certificate_is_a_command_error(
         _service(tmp_path)._accepted_server_pin(profile, dry_run=False)
 
     assert "connection refused" in excinfo.value.result.stderr
+
+
+def test_trusted_cert_follows_a_changed_server_key_and_logs_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from korserver.services.cert_pin import CertificatePin
+
+    presented = ["pin-sha256:FIRST"]
+    monkeypatch.setattr(
+        upstream_module,
+        "fetch_server_pin",
+        lambda host, port: CertificatePin(pin=presented[0], sha256="sha256:00"),
+    )
+    service = _service(tmp_path)
+    profile = _profile().model_copy(update={"trusted_cert": True})
+
+    assert service._accepted_server_pin(profile, dry_run=False) == "pin-sha256:FIRST"
+    assert service._accepted_server_pin(profile, dry_run=False) == "pin-sha256:FIRST"
+    presented[0] = "pin-sha256:SECOND"
+    assert service._accepted_server_pin(profile, dry_run=False) == "pin-sha256:SECOND"
+
+    log = service.log_file.read_text(encoding="utf-8")
+    assert log.count("certificate check disabled") == 1
+    assert "pin-sha256:FIRST -> pin-sha256:SECOND" in log
