@@ -377,6 +377,26 @@ class UpstreamProfileConfig(StrictModel):
     route_host_enabled: bool = False
     host_routes: list[str] = Field(default_factory=list)
     host_domains: list[str] = Field(default_factory=list)
+    # Server-driven host routing (the former korclient): take the routes
+    # (`route =`, CISCO_SPLIT_INC) and split-DNS domains (`split-dns =`,
+    # CISCO_SPLIT_DNS) the upstream server pushes in the connect handshake
+    # and add them to this profile's host routing on top of host_routes/
+    # host_domains. Pushed domains resolve through the upstream's own DNS
+    # (INTERNAL_IP4_DNS), itself routed through this tunnel. Only has an
+    # effect together with route_host_enabled. See services/upstream_pushed.py.
+    accept_server_routes: bool = False
+    # Mid-session refresh of those pushed lists: poll the upstream korserver
+    # panel's GET /api/client/routing through this profile's own tunnel
+    # (curl --interface), so edits made on the server apply without a
+    # reconnect. The endpoint identifies the caller by its VPN address, so
+    # point this at the panel address reachable inside the tunnel, e.g.
+    # https://10.10.10.1:8443. Unset -> handshake lists only.
+    sync_url: str | None = None
+    sync_interval: int = Field(default=60, ge=10)
+    # The request already travels inside this profile's authenticated
+    # tunnel, and an upstream panel usually runs on its own self-signed
+    # certificate, so TLS verification of the panel is opt-in.
+    sync_verify_tls: bool = False
     # Explicit override for the fwmark/table_id offset this profile's named
     # routing target uses (see RoutingService.list_targets()). Unset ->
     # derived from this profile's fixed position in upstream.profiles, the
@@ -425,6 +445,18 @@ class UpstreamProfileConfig(StrictModel):
         if value is None or value == "":
             return None
         return _validate_ip(value)
+
+    @field_validator("sync_url")
+    @classmethod
+    def validate_sync_url(cls, value: str | None) -> str | None:
+        if value is None or value.strip() == "":
+            return None
+        candidate = value.strip().rstrip("/")
+        if not candidate.startswith(("https://", "http://")):
+            raise ValueError("upstream.profiles[].sync_url must be an HTTP(S) URL")
+        if any(char.isspace() for char in candidate):
+            raise ValueError("upstream.profiles[].sync_url must not contain whitespace")
+        return candidate
 
     @field_validator("interface")
     @classmethod
@@ -1042,6 +1074,14 @@ class AppConfig(StrictModel):
             for profile in self.upstream.profiles
         ):
             reasons.append("profile_host_domains")
+        # Pushed split-DNS domains aren't known until the upstream sends
+        # them, so a profile accepting them keeps dnsmasq running up front
+        # (see services/upstream_pushed.py).
+        if self.upstream.enabled and any(
+            profile.enabled and profile.route_host_enabled and profile.accept_server_routes
+            for profile in self.upstream.profiles
+        ):
+            reasons.append("profile_server_routes")
         return reasons
 
     def client_dns_reasons(self) -> list[str]:

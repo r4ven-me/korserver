@@ -50,7 +50,10 @@ class DnsmasqConfigRenderer(TemplateRenderer):
         ]
         # Per-profile HOST domains (UpstreamProfileConfig.host_domains):
         # same idea, fed into that target's own dedicated host_set_v4/v6
-        # instead of its client set_v4/v6.
+        # instead of its client set_v4/v6. The server-pushed part of them
+        # (accept_server_routes, target.server_domains) additionally
+        # resolves through the upstream's own DNS: split-DNS domains are
+        # usually internal names nothing else can answer.
         named_targets_with_host_domains = [
             target for target in targets if target.host_enabled and target.host_domains
         ]

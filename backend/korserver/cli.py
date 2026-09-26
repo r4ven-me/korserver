@@ -581,6 +581,63 @@ def upstream_disconnect(
     echo_result(UpstreamService(get_config()).disconnect(profile or None, dry_run=dry_run))
 
 
+@upstream_app.command("hook")
+def upstream_hook(
+    reason: str = typer.Argument(help="vpnc-script event: connect/reconnect/disconnect/..."),
+) -> None:
+    """Internal: called by vpnc-script-korserver on tunnel events.
+
+    Stores the routes/split-DNS domains the upstream server pushed in the
+    handshake (openconnect's CISCO_SPLIT_INC_*/CISCO_SPLIT_DNS environment)
+    for the profile owning $TUNDEV. Never fails: it runs inside
+    openconnect's own connect sequence.
+    """
+    try:
+        profile = UpstreamService(get_config()).record_vpnc_event(reason)
+    except Exception as exc:  # noqa: BLE001 - must never break the tunnel
+        typer.echo(f"upstream hook failed: {exc}", err=True)
+        return
+    if profile is not None:
+        typer.echo(f"stored server-pushed routing for profile '{profile.name}'")
+
+
+@upstream_app.command("server-routes")
+def upstream_server_routes(
+    profile: str = typer.Argument(None, help="Profile (default: all)."),
+) -> None:
+    """Show the routes/split-DNS domains each upstream server pushed."""
+    service = UpstreamService(get_config())
+    payload = {
+        item.name: service.server_routing_status(item)
+        for item in service.list_profiles()
+        if profile is None or item.name == profile
+    }
+    typer.echo(json.dumps(payload, indent=2, sort_keys=True))
+
+
+@upstream_app.command("sync")
+def upstream_sync(
+    profile: str = typer.Argument(..., help="Profile with sync_url to refresh now."),
+) -> None:
+    """Pull a profile's routes/split-DNS from its upstream panel and apply them."""
+    config = get_config()
+    service = UpstreamService(config)
+    target = next((item for item in config.upstream.profiles if item.name == profile), None)
+    if target is None:
+        typer.echo(f"unknown upstream profile: {profile}", err=True)
+        raise typer.Exit(1)
+    synced = service.sync_server_routes(target)
+    if synced.sync_error:
+        typer.echo(f"sync failed: {synced.sync_error}", err=True)
+        raise typer.Exit(1)
+    for result in service.apply_server_routing_if_changed():
+        echo_result(result)
+    typer.echo(
+        f"{len(synced.routes)} routes, {len(synced.domains)} split-DNS domains "
+        f"(version {synced.version or '-'})"
+    )
+
+
 @upstream_app.command("watch")
 def upstream_watch(
     once: bool = typer.Option(
@@ -643,6 +700,13 @@ def upstream_watch(
             # selected_profile() return None, and that profile (now just
             # another disabled one) still needs to be torn down.
             service.enforce_profile_enablement()
+            # Server-pushed routing: pick up lists stored by the vpnc-script
+            # hook after openconnect's own internal reconnects, and poll
+            # sync_url profiles. Never allowed to kill the watchdog.
+            try:
+                service.refresh_server_routes()
+            except Exception as exc:  # noqa: BLE001
+                typer.echo(f"server-pushed routing refresh failed: {exc}", err=True)
         else:
             consecutive_failures = 0
         if once:

@@ -438,7 +438,7 @@ def test_openconnect_argv_materializes_base64_p12_without_key(tmp_path: Path) ->
     cert_path = Path(argv[argv.index("--certificate") + 1])
     assert cert_path.read_bytes() == b"p12-bytes"
     assert "--sslkey" not in argv
-    assert "--key-password=hunter2" in argv
+    assert _key_password_from_config(argv) == "hunter2"
 
 
 def test_openconnect_argv_passes_cert_pass_as_key_password(tmp_path: Path) -> None:
@@ -458,7 +458,27 @@ def test_openconnect_argv_passes_cert_pass_as_key_password(tmp_path: Path) -> No
 
     argv = UpstreamService(config).openconnect_argv(profile)
 
-    assert "--key-password=hunter2" in argv
+    assert _key_password_from_config(argv) == "hunter2"
+
+
+def test_openconnect_argv_keeps_key_password_out_of_the_process_list(tmp_path: Path) -> None:
+    # --key-password=PASS would sit in /proc/<pid>/cmdline (`ps aux`) for the
+    # tunnel's whole lifetime; it goes through a 0600 --config file instead.
+    config = _config(tmp_path)
+    profile = UpstreamProfileConfig(
+        name="primary",
+        server="vpn.example.com",
+        auth_type="cert",
+        cert_file="/etc/korserver/upstream.crt",
+        cert_pass="hunter2",
+    )
+
+    argv = UpstreamService(config).openconnect_argv(profile)
+
+    assert not any("hunter2" in arg for arg in argv)
+    config_path = Path(next(arg for arg in argv if arg.startswith("--config=")).split("=", 1)[1])
+    assert config_path.stat().st_mode & 0o777 == 0o600
+    assert config_path.parent == tmp_path / "secrets" / "upstream" / "primary"
 
 
 def test_openconnect_argv_omits_key_password_when_unset(tmp_path: Path) -> None:
@@ -473,7 +493,17 @@ def test_openconnect_argv_omits_key_password_when_unset(tmp_path: Path) -> None:
 
     argv = UpstreamService(config).openconnect_argv(profile)
 
-    assert not any(arg.startswith("--key-password") for arg in argv)
+    assert not any(arg.startswith(("--key-password", "--config")) for arg in argv)
+
+
+def _key_password_from_config(argv: list[str]) -> str | None:
+    for arg in argv:
+        if arg.startswith("--config="):
+            content = Path(arg.split("=", 1)[1]).read_text(encoding="utf-8")
+            for line in content.splitlines():
+                if line.startswith("key-password="):
+                    return line.split("=", 1)[1]
+    return None
 
 
 def test_openconnect_argv_daemonizes_with_pid_file(tmp_path: Path) -> None:
