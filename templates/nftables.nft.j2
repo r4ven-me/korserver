@@ -49,6 +49,9 @@ table inet {{ filter_table }} {
     type ipv6_addr
     flags interval
     auto-merge
+{% if target.host_routes_v6 %}
+    elements = { {{ target.host_routes_v6 | join(", ") }} }
+{% endif %}
   }
 {% endif %}
 {% endfor %}

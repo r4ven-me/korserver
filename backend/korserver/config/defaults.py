@@ -93,6 +93,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "mode": "full",
         "host_traffic": False,
         "host_mode": "full",
+        "host_dns": "off",
         "main_interface": "auto",
         "fwmark": "0x0c01",
         "table_id": 1201,

@@ -8,6 +8,7 @@ export type RoutingDraft = {
   tunnelDns: boolean;
   hostTraffic: boolean;
   hostMode: string;
+  hostDns: string;
   mainInterface: string;
   fwmark: string;
   tableId: number;

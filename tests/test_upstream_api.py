@@ -769,3 +769,78 @@ def test_fetch_pin_unreachable_server_is_a_client_error(
 
     assert response.status_code == 400
     assert "connection refused" in response.json()["detail"]
+
+
+def test_upstream_profile_saves_server_routing_fields(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+
+    response = client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "office",
+            "server": "vpn.example.com",
+            "username": "user",
+            "password": "secret",
+            "route_host_enabled": True,
+            "accept_server_routes": True,
+            "sync_url": "https://10.10.10.1:8443/",
+            "sync_interval": 120,
+            "sync_verify_tls": True,
+            "enable": True,
+        },
+    )
+
+    assert response.status_code == 200
+    profile = yaml.safe_load(config_path.read_text(encoding="utf-8"))["upstream"]["profiles"][0]
+    assert profile["accept_server_routes"] is True
+    assert profile["sync_url"] == "https://10.10.10.1:8443"
+    assert profile["sync_interval"] == 120
+    assert profile["sync_verify_tls"] is True
+
+
+def test_upstream_status_reports_server_routing_per_profile(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "office",
+            "server": "vpn.example.com",
+            "username": "user",
+            "password": "secret",
+            "route_host_enabled": True,
+            "accept_server_routes": True,
+            "enable": True,
+        },
+    )
+
+    status = client.get("/api/upstream/status", auth=("admin", "secret")).json()
+
+    server_routing = status["connections"][0]["server_routing"]
+    assert server_routing["active"] is True
+    assert server_routing["routes"] == []
+
+
+def test_upstream_profile_sync_requires_sync_url(tmp_path: Path) -> None:
+    config_path = tmp_path / "config.yaml"
+    client = _client(config_path, tmp_path)
+    client.post(
+        "/api/upstream/profiles",
+        auth=("admin", "secret"),
+        json={
+            "name": "office",
+            "server": "vpn.example.com",
+            "username": "user",
+            "password": "secret",
+            "enable": True,
+        },
+    )
+
+    response = client.post("/api/upstream/profiles/office/sync", auth=("admin", "secret"))
+    missing = client.post("/api/upstream/profiles/nope/sync", auth=("admin", "secret"))
+
+    assert response.status_code == 400
+    assert missing.status_code == 404

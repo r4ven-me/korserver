@@ -88,6 +88,10 @@ const upstreamProfileDraft: UpstreamProfileDraft = {
   route_host_enabled: false,
   host_routes: "",
   host_domains: "",
+  accept_server_routes: false,
+  sync_url: "",
+  sync_interval: "60",
+  sync_verify_tls: false,
   routing_offset: "",
   enable: true,
   enabled: true
@@ -132,6 +136,37 @@ describe("OTP delivery settings API", () => {
     expect(path).toBe(expectedPath);
     expect(init.method).toBe("POST");
     expect(JSON.parse(String(init.body))).toEqual(authMethodsPayload);
+  });
+});
+
+describe("saveUpstreamProfile server routing fields", () => {
+  it("sends the sync settings normalized, a blank sync URL as null", async () => {
+    const fetchMock = vi.fn().mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ status: "saved" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await saveUpstreamProfile("session", {
+      ...upstreamProfileDraft,
+      accept_server_routes: true,
+      sync_url: " https://10.10.10.1:8443 ",
+      sync_interval: "120",
+      sync_verify_tls: true
+    });
+    await saveUpstreamProfile("session", { ...upstreamProfileDraft, sync_interval: "" });
+
+    const withSync = JSON.parse(String((fetchMock.mock.calls[0] as [string, RequestInit])[1].body));
+    expect(withSync.accept_server_routes).toBe(true);
+    expect(withSync.sync_url).toBe("https://10.10.10.1:8443");
+    expect(withSync.sync_interval).toBe(120);
+    expect(withSync.sync_verify_tls).toBe(true);
+    const blank = JSON.parse(String((fetchMock.mock.calls[1] as [string, RequestInit])[1].body));
+    expect(blank.sync_url).toBeNull();
+    expect(blank.sync_interval).toBe(60);
   });
 });
 
@@ -288,6 +323,7 @@ describe("saveRoutingSettings", () => {
       tunnel_dns: true,
       host_traffic: true,
       host_mode: "split",
+      host_dns: "resolv_conf",
       main_interface: "auto",
       fwmark: "0x0c01",
       table_id: 1201,
@@ -307,5 +343,6 @@ describe("saveRoutingSettings", () => {
     const sent = JSON.parse(String(init.body));
     expect(sent.host_traffic).toBe(true);
     expect(sent.host_mode).toBe("split");
+    expect(sent.host_dns).toBe("resolv_conf");
   });
 });

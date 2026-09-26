@@ -45,6 +45,13 @@ nftset=/{{ domain }}/4#inet#{{ filter_table }}#{{ target.set_v4 }},6#inet#{{ fil
 {% endfor %}
 
 {% for target in named_targets_with_host_domains %}
+{% for domain in target.server_domains %}
+{% if domain not in public_domain_names %}
+{% for dns in target.server_dns %}
+server=/{{ domain }}/{{ dns }}
+{% endfor %}
+{% endif %}
+{% endfor %}
 {% for domain in target.host_domains %}
 nftset=/{{ domain }}/4#inet#{{ filter_table }}#{{ target.host_set_v4 }},6#inet#{{ filter_table }}#{{ target.host_set_v6 }}
 {% endfor %}

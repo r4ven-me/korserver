@@ -1,9 +1,6 @@
 import { Children, type ReactElement, type ReactNode, isValidElement, useState } from "react";
 
-// Marks a config field/section whose full split-routing/DNS enforcement is
-// specific to korclient (see korclient/README.md): a stock OpenConnect
-// client still receives the same values over the standard AnyConnect
-// handshake, but only korclient turns them into real policy-routing.
+// Renders each child section as a tab (its <summary> is the tab label).
 export function SettingsTabs({ children, ariaLabel }: { children: ReactNode; ariaLabel: string }) {
   const items = Children.toArray(children).filter(isValidElement) as ReactElement<{
     children?: ReactNode;

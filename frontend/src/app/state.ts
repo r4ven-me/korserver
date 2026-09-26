@@ -90,6 +90,10 @@ export const emptyUpstreamProfileDraft: UpstreamProfileDraft = {
   route_host_enabled: false,
   host_routes: "",
   host_domains: "",
+  accept_server_routes: false,
+  sync_url: "",
+  sync_interval: "60",
+  sync_verify_tls: false,
   routing_offset: "",
   enable: false,
   enabled: false
@@ -124,6 +128,10 @@ export function upstreamProfileToDraft(
     route_host_enabled: profile.route_host_enabled ?? false,
     host_routes: listText(profile.host_routes ?? []),
     host_domains: listText(profile.host_domains ?? []),
+    accept_server_routes: profile.accept_server_routes ?? false,
+    sync_url: profile.sync_url ?? "",
+    sync_interval: String(profile.sync_interval ?? 60),
+    sync_verify_tls: profile.sync_verify_tls ?? false,
     routing_offset: profile.routing_offset != null ? String(profile.routing_offset) : "",
     // Reflects the ACTUAL current upstream.enabled, not a hardcoded true --
     // editing a profile while upstream is deliberately disabled must not

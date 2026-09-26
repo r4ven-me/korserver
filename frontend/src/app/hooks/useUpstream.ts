@@ -11,7 +11,8 @@ import {
   saveUpstreamProfile,
   saveUpstreamSettings,
   setUpstreamProfileEnabled,
-  switchUpstream
+  switchUpstream,
+  syncUpstreamProfile
 } from "../../api";
 import { confirmAction } from "../../lib/async";
 import { syntheticCommand } from "../../lib/commands";
@@ -45,6 +46,9 @@ export function useUpstream(
   const [profileDialogKey, setProfileDialogKey] = useState(0);
   const [profileModalOpen, setProfileModalOpen] = useState(false);
   const [settingsModalOpen, setSettingsModalOpen] = useState(false);
+  // Upstream section: one client's own relay lists (route_clients_enabled/
+  // routes/domains), edited separately from the Clients dialog.
+  const [relayDraft, setRelayDraft] = useState<UpstreamProfileDraft | null>(null);
   const [upstreamInterface, setUpstreamInterface] = useState("oc-middle0");
   const [checkInterval, setCheckInterval] = useState(5);
   const [checkThreshold, setCheckThreshold] = useState(3);
@@ -68,7 +72,12 @@ export function useUpstream(
   });
 
   useEffect(() => {
-    if (tab !== "config" || configSection !== "upstream" || !authToken || !authInfo) {
+    if (
+      tab !== "config" ||
+      (configSection !== "clients" && configSection !== "upstream") ||
+      !authToken ||
+      !authInfo
+    ) {
       return;
     }
     // The watchdog connects/reconnects in the background, so the
@@ -94,7 +103,7 @@ export function useUpstream(
   const saveSettings = async (enabled: boolean) => {
     const result = await runAction(
       "upstream-settings",
-      `Upstream ${enabled ? "enabled" : "disabled"}`,
+      `Clients ${enabled ? "enabled" : "disabled"}`,
       (token) =>
         saveUpstreamSettings(token, {
           enabled,
@@ -131,7 +140,7 @@ export function useUpstream(
 
   const saveProfile = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const result = await runAction("upstream-profile", "Upstream profile saved", (token) =>
+    const result = await runAction("upstream-profile", "Client saved", (token) =>
       saveUpstreamProfile(token, upstreamDraft)
     );
     if (result !== null) {
@@ -141,12 +150,12 @@ export function useUpstream(
   };
 
   const deleteProfile = async (name: string) => {
-    if (!confirmAction(`Delete upstream profile ${name}?`)) {
+    if (!confirmAction(`Delete client ${name}?`)) {
       return;
     }
     const result = await runAction(
       `upstream-profile-delete-${name}`,
-      `Upstream profile ${name} deleted`,
+      `Client ${name} deleted`,
       (token) => deleteUpstreamProfile(token, name)
     );
     if (result !== null) {
@@ -160,7 +169,7 @@ export function useUpstream(
   const setProfileEnabled = async (name: string, enabled: boolean) => {
     const result = await runAction(
       `upstream-profile-enabled-${name}`,
-      `Upstream profile ${name} ${enabled ? "enabled" : "disabled"}`,
+      `Client ${name} ${enabled ? "enabled" : "disabled"}`,
       (token) => setUpstreamProfileEnabled(token, name, enabled)
     );
     if (result !== null) {
@@ -180,14 +189,14 @@ export function useUpstream(
       current &&
       current !== profile &&
       !confirmAction(
-        `Make "${profile}" the default profile? Client/host traffic currently ` +
+        `Make "${profile}" the default client? VPN-user/host traffic currently ` +
           `redirected via "${current}" will re-point to "${profile}" -- ` +
           "existing connections stay up."
       )
     ) {
       return;
     }
-    void runAction(`switch-${profile}`, `Upstream profile ${profile} selected`, (token) =>
+    void runAction(`switch-${profile}`, `Default client set to ${profile}`, (token) =>
       switchUpstream(token, profile)
     );
   };
@@ -207,7 +216,7 @@ export function useUpstream(
   const connectProfile = async (name: string) => {
     const result = await runAction(
       `upstream-profile-connect-${name}`,
-      `Profile ${name} connected`,
+      `Client ${name} connected`,
       (token) => connectUpstreamProfile(token, name, dryRun),
       { dryRunAware: true }
     );
@@ -217,7 +226,7 @@ export function useUpstream(
   const disconnectProfile = async (name: string) => {
     const result = await runAction(
       `upstream-profile-disconnect-${name}`,
-      `Profile ${name} disconnected`,
+      `Client ${name} disconnected`,
       (token) => disconnectUpstreamProfile(token, name, dryRun),
       { dryRunAware: true }
     );
@@ -248,6 +257,46 @@ export function useUpstream(
       )
     ) {
       setUpstreamDraft((current) => ({ ...current, server_cert_pin: result.pin }));
+    }
+  };
+
+  const syncProfile = async (name: string) => {
+    const result = await runAction(
+      `upstream-profile-sync-${name}`,
+      `Server lists of ${name} synced`,
+      (token) => syncUpstreamProfile(token, name)
+    );
+    if (result !== null) {
+      const routing = result.server_routing;
+      recordCommand(
+        "upstream",
+        syntheticCommand(
+          ["korctl", "upstream", "sync", name],
+          `${routing.routes.length} routes, ${routing.domains.length} split-DNS domains` +
+            (routing.version ? ` (version ${routing.version})` : "")
+        )
+      );
+    }
+  };
+
+  const editRelay = (profile: UpstreamProfile) =>
+    setRelayDraft(upstreamProfileToDraft(profile, Boolean(state.upstream?.enabled)));
+
+  const saveRelay = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!relayDraft) {
+      return;
+    }
+    const draft = relayDraft;
+    const result = await runAction("upstream-relay", `Relay lists of ${draft.name} saved`, (token) =>
+      saveUpstreamProfile(token, draft)
+    );
+    if (result !== null) {
+      recordCommand(
+        "upstream",
+        syntheticCommand(["korctl", "upstream", "profile", draft.name], "relay lists saved")
+      );
+      setRelayDraft(null);
     }
   };
 
@@ -298,6 +347,12 @@ export function useUpstream(
     disconnectProfile,
     openSettings,
     submitSettings,
-    fetchDraftServerPin
+    fetchDraftServerPin,
+    syncProfile,
+    relayDraft,
+    setRelayDraft,
+    editRelay,
+    saveRelay,
+    closeRelay: () => setRelayDraft(null)
   };
 }

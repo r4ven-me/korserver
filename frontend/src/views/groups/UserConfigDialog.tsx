@@ -73,7 +73,7 @@ export function UserConfigDialog({
           <section>
             <h3>
               DNS and routes
-              <KorclientHint text="Routes and Split DNS below reach any client over the standard AnyConnect handshake, and are also synced live to connected korclient clients via GET /api/client/routing (polled every sync.interval_seconds) — changes apply without reconnecting." />
+              <KorclientHint text="Routes and Split DNS below reach any client over the standard AnyConnect handshake, and are also synced live to connected Korvus clients (Config → Clients on the other server: “Use routes and domains pushed by the server” with a sync URL) via GET /api/client/routing — changes apply without reconnecting." />
             </h3>
             <div className="settings-grid">
               <ListField label="DNS" value={draft.dns} onChange={(value) => updateList("dns", value)} />
@@ -81,13 +81,13 @@ export function UserConfigDialog({
               <ListField
                 label="Split DNS"
                 value={draft.split_dns}
-                korclientHint="korclient resolves these through its own dnsmasq and routes the results through the tunnel automatically. A stock OpenConnect client only gets DNS-suffix scoping, with no real traffic routing."
+                korclientHint="A Korvus client resolves these through its own dnsmasq and routes the results through the tunnel automatically. A stock OpenConnect client only gets DNS-suffix scoping, with no real traffic routing."
                 onChange={(value) => updateList("split_dns", value)}
               />
               <ListField
                 label="Routes"
                 value={draft.routes}
-                korclientHint="korclient applies this as an nftables policy-route (kept out of the OS routing table). A stock OpenConnect client gets it as a plain pushed route instead."
+                korclientHint="A Korvus client applies this as an nftables policy-route (kept out of the OS routing table). A stock OpenConnect client gets it as a plain pushed route instead."
                 onChange={(value) => updateList("routes", value)}
               />
               <ListField label="No routes" value={draft.no_routes} onChange={(value) => updateList("no_routes", value)} />

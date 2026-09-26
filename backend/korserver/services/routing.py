@@ -4,7 +4,7 @@ import ipaddress
 import re
 import threading
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from korserver.config.models import (
@@ -20,6 +20,7 @@ from korserver.services.external_lists import (
     parse_list_text,
 )
 from korserver.services.files import FileManager
+from korserver.services.upstream_pushed import PushedRoutingStore
 
 DOMAIN_RE = re.compile(r"^[A-Za-z0-9.-]+$")
 _FETCH_USER_AGENT = "korserver-routing/1.0"
@@ -65,6 +66,15 @@ class RoutingTarget:
     host_domains: list[str]
     host_set_v4: str | None
     host_set_v6: str | None
+    # IPv6 part of the host routes (host_routes above is IPv4 only): each
+    # family goes into its own typed nft set.
+    host_routes_v6: list[str] = field(default_factory=list)
+    # Split-DNS domains the upstream server pushed (accept_server_routes),
+    # already included in host_domains; unlike the admin's own
+    # host_domains they resolve through the upstream's DNS (server_dns),
+    # since they're typically internal names only that DNS knows.
+    server_domains: list[str] = field(default_factory=list)
+    server_dns: list[str] = field(default_factory=list)
 
     @property
     def host_enabled(self) -> bool:
@@ -359,12 +369,24 @@ class RoutingService:
             # output in the generated file -- the numeric value is what
             # actually matters to nftables/ip rule.
             fwmark_width = len(config.routing.fwmark) - 2
+            pushed_store = PushedRoutingStore(config, self.files)
             for profile in config.upstream.profiles:
                 client_active = profile.route_clients_enabled and (
                     profile.routes or profile.domains
                 )
-                host_active = profile.route_host_enabled and (
-                    profile.host_routes or profile.host_domains
+                # Admin-configured host lists plus, with accept_server_routes,
+                # whatever the upstream server pushed/synced for this
+                # profile (empty otherwise -- see PushedRoutingStore.effective).
+                pushed = pushed_store.effective(profile)
+                host_route_list = self._merge_unique(
+                    profile.host_routes,
+                    pushed.routes,
+                    pushed.dns_host_routes() if pushed.domains else [],
+                )
+                host_domain_list = self._merge_unique(profile.host_domains, pushed.domains)
+                host_routes_v4, host_routes_v6 = _split_by_family(host_route_list)
+                host_active = profile.route_host_enabled and bool(
+                    host_route_list or host_domain_list
                 )
                 if not client_active and not host_active:
                     continue
@@ -390,10 +412,13 @@ class RoutingService:
                         domains=profile.domains if profile.route_clients_enabled else [],
                         killswitch=True,
                         profile=profile,
-                        host_routes=profile.host_routes if host_active else [],
-                        host_domains=profile.host_domains if host_active else [],
+                        host_routes=host_routes_v4 if host_active else [],
+                        host_domains=host_domain_list if host_active else [],
                         host_set_v4=f"host_v4_{safe_name}" if host_active else None,
                         host_set_v6=f"host_v6_{safe_name}" if host_active else None,
+                        host_routes_v6=host_routes_v6 if host_active else [],
+                        server_domains=pushed.domains if host_active else [],
+                        server_dns=pushed.dns if host_active else [],
                     )
                 )
         return targets
@@ -475,3 +500,16 @@ class RoutingService:
         if not domain or not DOMAIN_RE.match(domain):
             raise ValueError(f"invalid domain: {value}")
         return domain
+
+
+def _split_by_family(routes: list[str]) -> tuple[list[str], list[str]]:
+    """Split CIDRs/addresses into (IPv4, IPv6) lists for the typed nft sets."""
+    v4: list[str] = []
+    v6: list[str] = []
+    for route in routes:
+        try:
+            network = ipaddress.ip_network(route, strict=False)
+        except ValueError:
+            continue
+        (v4 if network.version == 4 else v6).append(route)
+    return v4, v6

@@ -15,6 +15,7 @@ export function readRoutingDraft(config: Record<string, unknown>): {
   tunnelDns: boolean;
   hostTraffic: boolean;
   hostMode: string;
+  hostDns: string;
   mainInterface: string;
   fwmark: string;
   tableId: number;
@@ -37,6 +38,7 @@ export function readRoutingDraft(config: Record<string, unknown>): {
     tunnelDns: readBoolean(split.tunnel_dns, false),
     hostTraffic: readBoolean(routing.host_traffic, false),
     hostMode: readString(routing.host_mode, "full"),
+    hostDns: readString(routing.host_dns, "off"),
     mainInterface: readString(routing.main_interface, "auto"),
     fwmark: readString(routing.fwmark, "0x0c01"),
     tableId: readNumber(routing.table_id, 1201),

@@ -1,182 +1,300 @@
-import { CheckCircle2, Pencil, Plus, Power, RadioTower, Settings, Star, Trash2, Unplug } from "lucide-react";
+import { ArrowRight, Pencil, Save } from "lucide-react";
+import type { FormEvent } from "react";
+import { BulkListEditor } from "../../components/BulkListEditor";
 import { LastCommandPanel } from "../../components/CommandOutput";
 import { Table } from "../../components/Table";
 import { ActionButton, IconButton, Pill } from "../../components/ui";
-import { formatDuration } from "../../lib/format";
-import type { CommandResult, UpstreamProfile, UpstreamStatus } from "../../api";
+import { type RoutingDraft, RoutingListSourcesPanel } from "./RoutingListSourcesPanel";
+import type {
+  CommandResult,
+  RoutingListStatus,
+  UpstreamProfile,
+  UpstreamStatus
+} from "../../api";
 
+// Config → Upstream: relaying this server's VPN users' traffic through one
+// of the Clients (middle-server mode). The connections themselves live in
+// Config → Clients; this section only decides which VPN-user traffic goes
+// through them, so it needs at least one client to do anything.
 export function UpstreamView({
   status,
   profiles,
+  serverEnabled,
+  routingDraft,
+  routes,
+  domains,
+  routesStatus,
+  domainsStatus,
   busy,
   commandOutput,
   onClearCommand,
-  onSetEnabled,
-  onSetProfileEnabled,
-  onSwitch,
-  onDeleteProfile,
-  onCreateProfile,
-  onEditProfile,
-  onOpenSettings,
-  onConnectProfile,
-  onDisconnectProfile
+  onRoutingDraftChange,
+  onSaveSettings,
+  onSaveRoutes,
+  onSaveDomains,
+  onPreviewRoutesUrl,
+  onRefreshRoutesUrl,
+  onPreviewDomainsUrl,
+  onRefreshDomainsUrl,
+  onEditRelay,
+  onOpenClients
 }: {
   status: UpstreamStatus | null;
   profiles: UpstreamProfile[];
+  serverEnabled: boolean;
+  routingDraft: RoutingDraft;
+  routes: string[];
+  domains: string[];
+  routesStatus: RoutingListStatus | null;
+  domainsStatus: RoutingListStatus | null;
   busy: string | null;
   commandOutput: CommandResult | CommandResult[] | null;
   onClearCommand: () => void;
-  onSetEnabled: (enabled: boolean) => void;
-  onSetProfileEnabled: (profile: string, enabled: boolean) => void;
-  onSwitch: (profile: string) => void;
-  onDeleteProfile: (profile: string) => void;
-  onCreateProfile: () => void;
-  onEditProfile: (profile: UpstreamProfile) => void;
-  onOpenSettings: () => void;
-  onConnectProfile: (profile: string) => void;
-  onDisconnectProfile: (profile: string) => void;
+  onRoutingDraftChange: (value: RoutingDraft) => void;
+  onSaveSettings: () => void;
+  onSaveRoutes: (items: string[]) => void;
+  onSaveDomains: (items: string[]) => void;
+  onPreviewRoutesUrl: (url: string) => void;
+  onRefreshRoutesUrl: (url: string) => void;
+  onPreviewDomainsUrl: (url: string) => void;
+  onRefreshDomainsUrl: (url: string) => void;
+  onEditRelay: (profile: UpstreamProfile) => void;
+  onOpenClients: () => void;
 }) {
-  const enabled = Boolean(status?.enabled);
-  const hasProfile = profiles.length > 0;
-  const activeProfile = status?.active_profile ?? null;
-  const connectionFor = (name: string) =>
-    status?.connections.find((connection) => connection.profile === name);
-  const connectedNames = new Set(
-    (status?.connections ?? [])
-      .filter((connection) => connection.connected)
-      .map((connection) => connection.profile)
-  );
-  // Default profile first, then whatever else is currently connected, then
-  // the rest in the order they were added -- Array.sort is stable, so a
-  // rank-only comparator preserves each group's original relative order.
-  const rank = (profile: UpstreamProfile) => {
-    if (profile.name === activeProfile) {
-      return 0;
-    }
-    return connectedNames.has(profile.name) ? 1 : 2;
+  const hasClients = profiles.length > 0;
+  const clientsEnabled = Boolean(status?.enabled);
+  const defaultClient = status?.active_profile ?? null;
+  const inert = !clientsEnabled || !serverEnabled;
+  const splitEnabled = routingDraft.mode === "split";
+  const splitDnsEnabled = splitEnabled && routingDraft.tunnelDns;
+  const relaying = hasClients && clientsEnabled && serverEnabled && routingDraft.clientTraffic;
+
+  const submit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    onSaveSettings();
   };
-  const sortedProfiles = [...profiles].sort((a, b) => rank(a) - rank(b));
 
   return (
-    <section className="panel upstream-profiles-panel">
-      <div className="panel-header">
-        <h2>Profiles</h2>
-        <div className="toolbar">
-          <Pill kind={enabled ? "ok" : "muted"}>{enabled ? "Upstream enabled" : "Upstream disabled"}</Pill>
-          <ActionButton label="Settings" icon={Settings} onClick={onOpenSettings} />
-          <ActionButton
-            label={enabled ? "Disable" : "Enable"}
-            icon={Power}
-            primary={!enabled}
-            danger={enabled}
-            disabled={!enabled && !hasProfile}
-            busy={busy === "upstream-settings"}
-            onClick={() => onSetEnabled(!enabled)}
-          />
-          <ActionButton label="Create profile" icon={Plus} onClick={onCreateProfile} />
+    <>
+      <section className="panel">
+        <div className="panel-header">
+          <h2>Upstream</h2>
+          <div className="toolbar">
+            <Pill kind={relaying ? "ok" : "muted"}>
+              {relaying && defaultClient ? `Relaying via ${defaultClient}` : "Not relaying"}
+            </Pill>
+          </div>
         </div>
-      </div>
-      <Table columns={["Name", "Server", "Interface", "Status", "Actions"]} empty="No profiles yet">
-        {sortedProfiles.map((profile) => {
-          const connection = connectionFor(profile.name);
-          const profileConnected = Boolean(connection?.connected);
-          const isDefault = profile.name === activeProfile;
-          return (
-            <tr key={profile.name}>
-              <td className="strong-cell">
-                <div className="inline-tools">
-                  <span>{profile.name}</span>
-                  {isDefault && <Pill kind="ok">Default</Pill>}
-                </div>
-              </td>
-              <td>{`${profile.server}:${profile.port}`}</td>
-              <td>{connection?.interface ?? profile.interface ?? "auto"}</td>
-              <td>
-                <div className="upstream-status-cell">
-                  {!profile.enabled ? (
-                    <Pill kind="muted">disabled</Pill>
-                  ) : profileConnected ? (
-                    <Pill kind="ok">connected</Pill>
-                  ) : (
-                    <Pill kind="muted">down</Pill>
-                  )}
-                  {profileConnected && (
-                    <>
-                      <span className="muted-line">
-                        {`Internal ${connection?.local_ip ?? "-"} / External ${connection?.remote ?? "-"}`}
-                      </span>
-                      <span className="muted-line">
-                        {`Connected for ${formatDuration(connection?.connected_for_seconds ?? null)}`}
-                      </span>
-                      {connection?.connected_since && (
-                        <span
-                          className="muted-line"
-                          title="This timestamp resets when the OpenConnect process reconnects or restarts."
-                        >
-                          {`Since ${new Date(connection.connected_since).toLocaleString()}`}
-                        </span>
-                      )}
-                    </>
-                  )}
-                </div>
-              </td>
-              <td>
-                <div className="toolbar">
-                  {profileConnected ? (
-                    <IconButton
-                      label="Disconnect"
-                      icon={Unplug}
-                      busy={busy === `upstream-profile-disconnect-${profile.name}`}
-                      onClick={() => onDisconnectProfile(profile.name)}
-                    />
-                  ) : (
-                    <IconButton
-                      label="Connect"
-                      icon={RadioTower}
-                      disabled={!profile.enabled}
-                      busy={busy === `upstream-profile-connect-${profile.name}`}
-                      onClick={() => onConnectProfile(profile.name)}
-                    />
-                  )}
-                  <IconButton
-                    label={isDefault ? "Default profile" : "Make default profile"}
-                    icon={isDefault ? CheckCircle2 : Star}
-                    disabled={isDefault || !profile.enabled}
-                    busy={busy === `switch-${profile.name}`}
-                    onClick={() => onSwitch(profile.name)}
-                  />
-                  <IconButton
-                    label={
-                      profile.enabled
-                        ? "Disable profile (stop watchdog, disconnect)"
-                        : "Enable profile (let watchdog dial it)"
+        <p className="muted-line">
+          Sends the traffic of this server&rsquo;s VPN users onward through one of the
+          Clients (middle-server mode). The connections themselves, failover and health
+          checks are managed in Clients.
+        </p>
+        {!hasClients ? (
+          <div className="upstream-empty">
+            <p>
+              Upstream needs at least one client: create the outbound connection it should
+              relay through first.
+            </p>
+            <ActionButton label="Go to Clients" icon={ArrowRight} primary onClick={onOpenClients} />
+          </div>
+        ) : (
+          <form className="upstream-settings-form" onSubmit={submit}>
+            {!serverEnabled && (
+              <p className="muted-line">
+                <Pill kind="warning">VPN server disabled</Pill> There are no VPN users to relay
+                while the server is off (Config → Server).
+              </p>
+            )}
+            {!clientsEnabled && (
+              <p className="muted-line">
+                <Pill kind="warning">Clients disabled</Pill> Enable Clients to relay through them.
+              </p>
+            )}
+            <p className="muted-line">
+              {defaultClient
+                ? `Default client: ${defaultClient} (change it in Clients). `
+                : "No default client selected yet (pick one in Clients). "}
+              A client&rsquo;s own relay lists below always win over this default.
+            </p>
+            <label className="switch">
+              <input
+                checked={routingDraft.clientTraffic}
+                disabled={inert}
+                onChange={(event) =>
+                  onRoutingDraftChange({ ...routingDraft, clientTraffic: event.target.checked })
+                }
+                type="checkbox"
+              />
+              <span>Relay VPN users&rsquo; traffic through the default client</span>
+            </label>
+            {routingDraft.clientTraffic && (
+              <label>
+                <span>Mode</span>
+                <select
+                  disabled={inert}
+                  value={routingDraft.mode}
+                  onChange={(event) =>
+                    onRoutingDraftChange({ ...routingDraft, mode: event.target.value })
+                  }
+                >
+                  <option value="full">Full (all traffic via Upstream)</option>
+                  <option value="split">Split (only listed traffic via Upstream)</option>
+                </select>
+              </label>
+            )}
+            {routingDraft.clientTraffic && splitEnabled && (
+              <div className="routing-substep">
+                <label
+                  className="switch"
+                  title="Push this server's dnsmasq as the DNS for VPN users and resolve the Domains list below into the split set. Distinct from the per-user/group 'Split DNS' setting. The dnsmasq listen address/port are configured in Config → DNS."
+                >
+                  <input
+                    checked={routingDraft.tunnelDns}
+                    disabled={inert}
+                    onChange={(event) =>
+                      onRoutingDraftChange({ ...routingDraft, tunnelDns: event.target.checked })
                     }
-                    icon={Power}
-                    danger={profile.enabled}
-                    busy={busy === `upstream-profile-enabled-${profile.name}`}
-                    onClick={() => onSetProfileEnabled(profile.name, !profile.enabled)}
+                    type="checkbox"
                   />
-                  <IconButton
-                    label="Edit profile"
-                    icon={Pencil}
-                    onClick={() => onEditProfile(profile)}
+                  <span>Also split by domain (needs this server&rsquo;s own DNS)</span>
+                </label>
+                <section className="split">
+                  <BulkListEditor
+                    title="Routes"
+                    items={routes}
+                    placeholder={"10.20.0.0/16\n203.0.113.5"}
+                    busy={busy === "save-routes"}
+                    disabled={inert}
+                    onSave={onSaveRoutes}
                   />
-                  <IconButton
-                    label="Delete profile"
-                    icon={Trash2}
-                    danger
-                    busy={busy === `upstream-profile-delete-${profile.name}`}
-                    onClick={() => onDeleteProfile(profile.name)}
+                  {splitDnsEnabled && (
+                    <BulkListEditor
+                      title="Domains"
+                      items={domains}
+                      placeholder={"internal.example\ncorp.example.com"}
+                      busy={busy === "save-domains"}
+                      disabled={inert}
+                      onSave={onSaveDomains}
+                    />
+                  )}
+                </section>
+                <section className="split">
+                  <RoutingListSourcesPanel
+                    title="Route sources"
+                    filesLabel="Route files (one path per line)"
+                    filesPlaceholder={"/var/lib/korserver/extra-routes.txt"}
+                    urlsLabel="Route URLs (one per line)"
+                    urlsPlaceholder={"https://lists.example.com/routes.txt"}
+                    disabled={inert}
+                    filesText={routingDraft.routesFilesText}
+                    urlsText={routingDraft.routesUrlsText}
+                    status={routesStatus}
+                    busy={busy}
+                    busyKeyPrefix="routes"
+                    onFilesTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, routesFilesText: value })
+                    }
+                    onUrlsTextChange={(value) =>
+                      onRoutingDraftChange({ ...routingDraft, routesUrlsText: value })
+                    }
+                    onPreviewUrl={onPreviewRoutesUrl}
+                    onRefreshUrl={onRefreshRoutesUrl}
                   />
-                </div>
-              </td>
-            </tr>
-          );
-        })}
-      </Table>
-      {commandOutput && (
-        <LastCommandPanel title="Last upstream command" result={commandOutput} onClose={onClearCommand} />
+                  {splitDnsEnabled && (
+                    <RoutingListSourcesPanel
+                      title="Domain sources"
+                      filesLabel="Domain files (one path per line)"
+                      filesPlaceholder={"/var/lib/korserver/extra-domains.txt"}
+                      urlsLabel="Domain URLs (one per line)"
+                      urlsPlaceholder={"https://lists.example.com/domains.txt"}
+                      disabled={inert}
+                      filesText={routingDraft.domainsFilesText}
+                      urlsText={routingDraft.domainsUrlsText}
+                      status={domainsStatus}
+                      busy={busy}
+                      busyKeyPrefix="domains"
+                      onFilesTextChange={(value) =>
+                        onRoutingDraftChange({ ...routingDraft, domainsFilesText: value })
+                      }
+                      onUrlsTextChange={(value) =>
+                        onRoutingDraftChange({ ...routingDraft, domainsUrlsText: value })
+                      }
+                      onPreviewUrl={onPreviewDomainsUrl}
+                      onRefreshUrl={onRefreshDomainsUrl}
+                    />
+                  )}
+                </section>
+                <p className="muted-line">
+                  Route/domain sources are saved with the button below -- fill these in, click
+                  Save, then validate/download each URL.
+                </p>
+              </div>
+            )}
+            <div className="modal-actions">
+              <button
+                className="primary-button"
+                disabled={busy === "routing-settings"}
+                type="submit"
+              >
+                <Save size={18} aria-hidden="true" />
+                <span>Save</span>
+              </button>
+            </div>
+          </form>
+        )}
+      </section>
+
+      {hasClients && (
+        <section className="panel">
+          <div className="panel-header">
+            <h2>Relay lists per client</h2>
+          </div>
+          <p className="muted-line">
+            Send specific destinations of VPN users through a specific client, whichever
+            client is the default.
+          </p>
+          <Table columns={["Client", "Relay lists", "Actions"]} empty="No clients yet">
+            {profiles.map((profile) => {
+              const relayOn = Boolean(profile.route_clients_enabled);
+              const routeCount = profile.routes?.length ?? 0;
+              const domainCount = profile.domains?.length ?? 0;
+              return (
+                <tr key={profile.name}>
+                  <td className="strong-cell">
+                    <div className="inline-tools">
+                      <span>{profile.name}</span>
+                      {profile.name === defaultClient && <Pill kind="ok">Default</Pill>}
+                    </div>
+                  </td>
+                  <td>
+                    {relayOn && routeCount + domainCount > 0 ? (
+                      <span>{`${routeCount} routes / ${domainCount} domains`}</span>
+                    ) : (
+                      <span className="muted-line">none</span>
+                    )}
+                  </td>
+                  <td>
+                    <IconButton
+                      label={`Edit relay lists of ${profile.name}`}
+                      icon={Pencil}
+                      onClick={() => onEditRelay(profile)}
+                    />
+                  </td>
+                </tr>
+              );
+            })}
+          </Table>
+        </section>
       )}
-    </section>
+
+      {commandOutput && (
+        <LastCommandPanel
+          title="Last upstream command"
+          result={commandOutput}
+          onClose={onClearCommand}
+        />
+      )}
+    </>
   );
 }

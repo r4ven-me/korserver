@@ -63,6 +63,7 @@ export function useRouting(core: PanelCore) {
     tunnelDns: false,
     hostTraffic: false,
     hostMode: "full",
+    hostDns: "off",
     mainInterface: "auto",
     fwmark: "0x0c01",
     tableId: 1201,
@@ -129,6 +130,7 @@ export function useRouting(core: PanelCore) {
         tunnel_dns: routingDraft.tunnelDns,
         host_traffic: routingDraft.hostTraffic,
         host_mode: routingDraft.hostMode,
+        host_dns: routingDraft.hostDns,
         main_interface: routingDraft.mainInterface,
         fwmark: routingDraft.fwmark,
         table_id: routingDraft.tableId,
@@ -144,7 +146,13 @@ export function useRouting(core: PanelCore) {
       })
     );
     if (result !== null) {
-      recordCommand("routing", syntheticCommand(["korctl", "routing", "settings"], "saved"));
+      recordCommand(
+        "routing",
+        syntheticCommand(
+          ["korctl", "routing", "settings"],
+          result.host_dns ? `saved\nhost DNS: ${result.host_dns.detail}` : "saved"
+        )
+      );
     }
   };
 
