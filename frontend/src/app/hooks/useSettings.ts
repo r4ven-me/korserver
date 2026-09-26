@@ -92,7 +92,8 @@ export function useSettings(core: PanelCore) {
       (token) => saveAuthMethodsSettings(token, authMethodsPayload(authMethodsDraft))
     );
     if (result !== null) {
-      recordCommand("config", syntheticCommand(["korctl", "server", "auth-settings"], "saved"));
+      const saved = syntheticCommand(["korctl", "server", "auth-settings"], "saved");
+      recordCommand("config", result.reload ? [saved, result.reload] : saved);
     }
   };
 

@@ -7,8 +7,10 @@ from pydantic import BaseModel, Field
 
 from korserver.api.auth import require_admin
 from korserver.api.routes_config import apply_config_patch
+from korserver.api.routes_server import ocserv_apply_result, running_ocserv_conf
 from korserver.config.models import AppConfig, GroupPolicyConfig, OidcProviderConfig
 from korserver.services.secrets import is_secret_key
+from korserver.services.server import ServerService
 
 router = APIRouter(dependencies=[Depends(require_admin)])
 
@@ -80,8 +82,17 @@ def save_oidc_settings(
             "group_separator": payload.radius_group_separator,
         },
     }
+    previous = running_ocserv_conf(request)
     loaded_config, written = apply_config_patch(request, {"auth": {"oidc": patch}})
-    return {"status": "saved", "written": written, "identity": _identity_dump(loaded_config)}
+    # Enabling/disabling the PAM/RADIUS connector changes ocserv's `auth =`
+    # lines, which only a restart applies.
+    reload_result = ServerService(loaded_config).apply_config_change(previous)
+    return {
+        "status": "saved",
+        "written": written,
+        "identity": _identity_dump(loaded_config),
+        "reload": ocserv_apply_result(reload_result),
+    }
 
 
 @router.post("/settings")

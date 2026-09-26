@@ -126,3 +126,53 @@ def test_server_status_reports_rpc_failure(tmp_path: Path) -> None:
 
     assert not result.ok
     assert "cannot reach supervisord" in result.stderr
+
+
+def _config(tmp_path: Path, **overrides: Any) -> AppConfig:
+    data: dict[str, Any] = {
+        "system": {
+            "generated_dir": tmp_path,
+            "data_dir": tmp_path,
+            "secrets_dir": tmp_path / "secrets",
+        }
+    }
+    data.update(overrides)
+    return AppConfig.model_validate(data)
+
+
+def test_auth_method_change_restarts_ocserv(tmp_path: Path) -> None:
+    from korserver.renderers import OcservConfigRenderer
+
+    before = _config(tmp_path, auth={"password": {"enabled": True}})
+    after = _config(
+        tmp_path,
+        auth={"password": {"enabled": False}, "certificate": {"enabled": True}},
+    )
+    rpc = FakeRpcClient()
+
+    result = ServerService(after, rpc_client=rpc).apply_config_change(
+        OcservConfigRenderer().render(before)
+    )
+
+    assert result is not None and result.ok
+    assert rpc.calls == [("stopProcess", "ocserv"), ("startProcess", "ocserv")]
+
+
+def test_reloadable_change_only_sends_sighup(tmp_path: Path) -> None:
+    from korserver.renderers import OcservConfigRenderer
+
+    before = _config(tmp_path, server={"max_clients": 10})
+    after = _config(tmp_path, server={"max_clients": 20})
+    rpc = FakeRpcClient()
+
+    ServerService(after, rpc_client=rpc).apply_config_change(OcservConfigRenderer().render(before))
+
+    assert rpc.calls == [("signalProcess", "ocserv", "HUP")]
+
+
+def test_apply_config_change_skips_disabled_ocserv(tmp_path: Path) -> None:
+    config = _config(tmp_path, server={"enabled": False})
+    rpc = FakeRpcClient()
+
+    assert ServerService(config, rpc_client=rpc).apply_config_change("") is None
+    assert rpc.calls == []
