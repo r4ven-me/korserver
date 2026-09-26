@@ -78,6 +78,12 @@ class UpstreamProfileRequest(BaseModel):
     route_host_enabled: bool = False
     host_routes: list[str] = Field(default_factory=list)
     host_domains: list[str] = Field(default_factory=list)
+    # Server-pushed host routing (UpstreamProfileConfig.accept_server_routes/
+    # sync_*): the routes/split-DNS the upstream server hands this profile.
+    accept_server_routes: bool = False
+    sync_url: str | None = None
+    sync_interval: int = 60
+    sync_verify_tls: bool = False
     # Per-profile: whether the watchdog should keep this profile dialed at
     # all (UpstreamProfileConfig.enabled). Distinct from `enable` below,
     # which is the *global* upstream.enabled toggle set when saving any
@@ -219,6 +225,38 @@ def save_profile(
         "profiles": [
             _safe_profile_dump(item)
             for item in loaded_config.upstream.profiles
+        ],
+    }
+
+
+@router.post("/profiles/{name}/sync")
+def sync_profile(request: Request, name: str) -> dict[str, object]:
+    """Pull this profile's routes/split-DNS from its upstream panel now
+    (UpstreamProfileConfig.sync_url) and apply whatever changed. RUNTIME:
+    network, through the profile's own tunnel."""
+    config: AppConfig = request.app.state.config
+    profile = next((item for item in config.upstream.profiles if item.name == name), None)
+    if profile is None:
+        raise HTTPException(status_code=404, detail=f"unknown upstream profile: {name}")
+    if not profile.sync_url:
+        raise HTTPException(status_code=400, detail=f"profile {name!r} has no sync_url")
+    service = UpstreamService(config)
+    synced = service.sync_server_routes(profile)
+    if synced.sync_error:
+        raise HTTPException(status_code=502, detail=f"sync failed: {synced.sync_error}")
+    results = service.apply_server_routing_if_changed()
+    return {
+        "status": "synced",
+        "server_routing": service.server_routing_status(profile),
+        "results": [
+            {
+                "argv": list(result.argv),
+                "returncode": result.returncode,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "dry_run": result.dry_run,
+            }
+            for result in results
         ],
     }
 

@@ -72,6 +72,18 @@ stdout_logfile_maxbytes=0
 redirect_stderr=true
 {% endif %}
 
+[program:host-dns-guard]
+; Always registered, like dnsmasq above: a no-op loop while
+; routing.host_dns is off, so enabling it in the panel needs no supervisord
+; restart. Keeps the host resolver pointed at dnsmasq and restores the
+; host's own resolv.conf on SIGTERM (container stop).
+command=/usr/local/bin/korctl host-dns guard
+autorestart=true
+stopwaitsecs=15
+stdout_logfile={{ config.system.log_dir }}/host-dns.log
+stdout_logfile_maxbytes=0
+redirect_stderr=true
+
 [program:log-rotation]
 ; Runs unconditionally: korctl re-reads the config on every cycle and is a
 ; no-op while system.log_rotation.enabled is false, so toggling rotation in

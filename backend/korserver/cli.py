@@ -27,6 +27,7 @@ from korserver.services.config import ConfigService
 from korserver.services.diagnostics import DiagnosticsService
 from korserver.services.files import FileManager
 from korserver.services.groups import GroupConfigService
+from korserver.services.host_dns import HostDnsService
 from korserver.services.internal_dns import InternalDnsService
 from korserver.services.logs import LogRotationService, LogService
 from korserver.services.nftables import NftablesService
@@ -60,6 +61,7 @@ identity_oidc_app = typer.Typer(help="Manage OIDC connector settings")
 identity_group_app = typer.Typer(help="Manage VPN group policies")
 identity_group_config_app = typer.Typer(help="Manage ocserv config-per-group files")
 nft_app = typer.Typer(help="Manage project-owned nftables state")
+host_dns_app = typer.Typer(help="Point the host's resolver at the built-in dnsmasq")
 web_app = typer.Typer(help="Manage Web GUI security")
 
 STATE: dict[str, Path | None] = {"config_path": None, "env_file": None}
@@ -714,6 +716,60 @@ def upstream_watch(
         time.sleep(config.upstream.check_interval)
 
 
+@host_dns_app.command("status")
+def host_dns_status() -> None:
+    typer.echo(json.dumps(HostDnsService(get_config()).status(), indent=2, sort_keys=True))
+
+
+@host_dns_app.command("apply")
+def host_dns_apply() -> None:
+    """Point (or stop pointing) the host resolver at dnsmasq per routing.host_dns."""
+    typer.echo(HostDnsService(get_config()).apply().detail)
+
+
+@host_dns_app.command("restore")
+def host_dns_restore() -> None:
+    """Put the host's original resolv.conf back."""
+    typer.echo(HostDnsService(get_config()).restore().detail)
+
+
+@host_dns_app.command("guard")
+def host_dns_guard(
+    interval: int = typer.Option(30, "--interval", min=5),
+) -> None:
+    """Supervisor entrypoint: keep routing.host_dns asserted, restore on stop.
+
+    Re-reads the config every cycle (so toggling routing.host_dns in the
+    panel applies without restarting anything) and re-asserts the host
+    resolv.conf when NetworkManager/DHCP rewrote it. On SIGTERM (container
+    shutdown) it puts the host's original resolv.conf back: the host must
+    not keep pointing at a dnsmasq that is about to stop.
+    """
+    import signal
+
+    stopping = False
+
+    def _stop(_signum: int, _frame: object) -> None:
+        nonlocal stopping
+        stopping = True
+
+    signal.signal(signal.SIGTERM, _stop)
+    signal.signal(signal.SIGINT, _stop)
+    last_detail = ""
+    while not stopping:
+        try:
+            result = HostDnsService(get_config()).apply()
+            if result.changed or result.detail != last_detail:
+                typer.echo(result.detail)
+                last_detail = result.detail
+        except Exception as exc:  # noqa: BLE001 - keep guarding
+            typer.echo(f"host DNS check failed: {exc}", err=True)
+        deadline = time.monotonic() + interval
+        while not stopping and time.monotonic() < deadline:
+            time.sleep(0.5)
+    typer.echo(HostDnsService(get_config()).restore().detail)
+
+
 @routes_app.command("list")
 def routes_list() -> None:
     for route in RoutingService(get_config()).list_routes():
@@ -1111,6 +1167,7 @@ app.add_typer(routes_app, name="routes")
 app.add_typer(domains_app, name="domains")
 app.add_typer(internal_dns_app, name="internal-dns")
 app.add_typer(nft_app, name="nft")
+app.add_typer(host_dns_app, name="host-dns")
 app.add_typer(web_app, name="web")
 
 

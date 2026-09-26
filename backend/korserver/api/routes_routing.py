@@ -8,6 +8,7 @@ from korserver.api.routes_config import apply_config_patch
 from korserver.config.models import AppConfig
 from korserver.services.command import CommandResult
 from korserver.services.config import ConfigService
+from korserver.services.host_dns import HostDnsService
 from korserver.services.nftables import NftablesService
 from korserver.services.routing import RoutingService
 
@@ -37,6 +38,7 @@ class RoutingSettingsRequest(BaseModel):
     tunnel_dns: bool = False
     host_traffic: bool = False
     host_mode: str = "full"
+    host_dns: str | None = None
     main_interface: str | None = None
     fwmark: str | None = None
     table_id: int | None = None
@@ -265,6 +267,8 @@ def save_routing_settings(
         "split": split,
         "host_split": host_split,
     }
+    if payload.host_dns is not None:
+        patch["host_dns"] = payload.host_dns
     if payload.main_interface is not None:
         patch["main_interface"] = payload.main_interface
     if payload.fwmark is not None:
@@ -274,11 +278,21 @@ def save_routing_settings(
     if payload.nft_prefix is not None:
         patch["nft_prefix"] = payload.nft_prefix
     loaded_config, written = apply_config_patch(request, {"routing": patch})
+    # Apply right away instead of waiting for host-dns-guard's next cycle.
+    # RUNTIME: touches the mounted host resolver files, if any.
+    host_dns = HostDnsService(loaded_config).apply()
     return {
         "status": "saved",
         "written": written,
         "routing": loaded_config.routing.model_dump(mode="json"),
+        "host_dns": host_dns.as_dict(),
     }
+
+
+@router.get("/host-dns")
+def host_dns_status(request: Request) -> dict[str, object]:
+    config: AppConfig = request.app.state.config
+    return HostDnsService(config).status()
 
 
 @router.post("/routes")

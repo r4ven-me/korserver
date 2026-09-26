@@ -735,6 +735,17 @@ class RoutingConfig(StrictModel):
     # sets to approximate it.
     host_traffic: bool = False
     host_mode: Literal["full", "split"] = "full"
+    # Point the HOST's own resolver at the built-in dnsmasq, so domain-based
+    # host routing (host_split/host_domains, server-pushed split-DNS)
+    # actually sees the host's lookups. Needs network_mode: host plus a
+    # mount of the host file/directory (see services/host_dns.py):
+    #   resolv_conf -- /etc/resolv.conf:/host/etc/resolv.conf, rewritten in
+    #                  place and restored when korserver stops;
+    #   resolved    -- /etc/systemd/resolved.conf.d:/host/resolved.conf.d, a
+    #                  systemd-resolved drop-in (restart resolved once).
+    # Only asserted while dnsmasq actually runs (dns_tunnel_active()), so
+    # the host never ends up pointed at a resolver that isn't there.
+    host_dns: Literal["off", "resolv_conf", "resolved"] = "off"
     main_interface: str = "auto"
     fwmark: str = "0x0c01"
     table_id: int = Field(default=1201, ge=1)
