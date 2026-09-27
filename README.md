@@ -134,7 +134,7 @@ Key files:
 - `templates/` - Jinja2 templates for generated system configs;
 - `tests/` - pytest coverage;
 - `docs/` - additional notes on architecture, security, networking and Docker;
-- `examples/` - minimal, full and middle-server configurations;
+- `examples/` - minimal, full, middle-server and client-only configurations;
 - `Dockerfile` - frontend/backend test stages and the runtime image;
 - `compose.yaml` - production-like container startup;
 - `config.example.yaml` - main example YAML config;
@@ -1206,6 +1206,119 @@ upstream:
 
 Set from the Upstream tab's profile editor ("Target routes"/"Target domains" fields) or
 directly in `config.yaml`.
+
+### Routing the host's own traffic through a profile
+
+The same idea applies to this **host's** own traffic (not VPN clients - this box may not
+even run a VPN server, see "Client-only deployment" below), via a separate toggle and
+separate lists, independent of the global `routing.host_traffic`/`host_mode`:
+
+```yaml
+upstream:
+  profiles:
+    - name: private-main
+      route_host_enabled: true
+      host_routes:
+        - 10.60.0.0/16
+      host_domains:
+        - internal.example.com
+```
+
+Set from the Upstream tab's profile dialog ("Route host traffic" section) or directly in
+`config.yaml`.
+
+### Server-pushed routes and split-DNS
+
+With `accept_server_routes: true`, whatever the upstream pushes in the connect handshake
+(`route =`/CISCO_SPLIT_INC and `split-dns =`/CISCO_SPLIT_DNS - the same fields Korvus
+Client's full-tunnel/split modes use) is merged into this profile's host routing on top
+of `host_routes`/`host_domains` above. Pushed domains resolve through the upstream's own
+DNS (the tunnel's `INTERNAL_IP4_DNS`), not the host's normal resolvers, since they're
+typically internal names nothing else can answer. Requires `route_host_enabled: true` -
+without it there's no host routing to add these to:
+
+```yaml
+upstream:
+  profiles:
+    - name: private-main
+      route_host_enabled: true
+      accept_server_routes: true
+```
+
+### Mid-session sync
+
+The pushed lists above are captured once, at connect time. If the upstream is itself a
+Korvus Server, its admin can add or remove routes/split-DNS domains from its own panel at
+any time - `sync_url` refreshes this profile's pushed lists on the already-open tunnel
+without reconnecting, by polling the upstream panel's own `GET /api/client/routing`
+(the same endpoint Korvus Client polls, see "Client routing sync" in
+`docs/architecture.md`) every `sync_interval` seconds:
+
+```yaml
+upstream:
+  profiles:
+    - name: private-main
+      route_host_enabled: true
+      accept_server_routes: true
+      sync_url: https://10.10.10.1:8443
+      sync_interval: 60
+      # The upstream panel usually runs on its own private-CA certificate;
+      # verification is opt-in since the request already travels inside this
+      # profile's authenticated tunnel.
+      sync_verify_tls: false
+```
+
+Trigger a sync immediately instead of waiting for the interval:
+
+```bash
+docker compose exec korserver korctl upstream sync private-main
+```
+
+Or the **Sync now** button in the panel's Clients table.
+
+### Host DNS
+
+`routing.host_dns` points this **host's** own resolver at the built-in dnsmasq, so
+domain-based host routing above (and `routing.host_split.domains`) actually applies to
+lookups the host itself makes, not just the container's:
+
+```yaml
+routing:
+  host_dns: resolv_conf
+```
+
+- `resolv_conf` - rewrites `/etc/resolv.conf` in place; the original is kept in
+  `data_dir` and restored automatically when `host_dns` is turned off or the container
+  stops.
+- `resolved` - installs a `systemd-resolved` drop-in instead. After the first time this
+  is enabled, run `systemctl restart systemd-resolved` on the host once - resolved only
+  reads new drop-ins on (re)start, and the container cannot restart a host service
+  itself.
+
+Only takes effect while dnsmasq is actually running (i.e. something else above already
+needs it - `accept_server_routes`, `host_domains`, or split-DNS), so `host_dns` never
+points the host at a resolver that isn't there. Either mode needs the host's resolver
+file/directory bind-mounted into the container, on top of the `network_mode: host` the
+base `compose.yaml` already uses - see "Client-only deployment" below for the override
+that adds it.
+
+### Client-only deployment
+
+Everything above works the same with `server.enabled: false`: korserver then runs
+purely as an outbound client - no ocserv, no VPN-server healthcheck, just the upstream
+tunnel(s), host routing, and (optionally) `routing.host_dns` - the same role Korvus
+Client fills as a standalone container, useful when this box doesn't also need to accept
+inbound VPN clients of its own:
+
+```bash
+cp examples/config.client.yaml config/config.yaml
+docker compose -f compose.yaml -f compose.client.yaml up -d
+```
+
+`examples/config.client.yaml` has a complete profile (host routing,
+`accept_server_routes`, `sync_url`, `routing.host_dns: resolv_conf`);
+`compose.client.yaml` adds the `/etc/resolv.conf` bind mount that mode needs (a commented
+alternative mount is included for `resolved`).
 
 Middle-server routing, reconnect/failover and end-to-end access to the private network
 still depend on the real network, the upstream server, and nftables/policy-routing on

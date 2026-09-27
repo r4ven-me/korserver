@@ -105,7 +105,15 @@ Required:
 - logs and status;
 - trusted cert option;
 - cert/password/p12 auth support;
-- secret masking.
+- secret masking;
+- per-profile HOST routing (`route_host_enabled`/`host_routes`/`host_domains`),
+  independent of client-side targeting and of the global `routing.host_traffic`;
+- accept server-pushed routes and split-DNS domains (`accept_server_routes`),
+  merged into the per-profile host routing above;
+- mid-session sync of those pushed lists on the live tunnel (`sync_url`/
+  `sync_interval`, `korctl upstream sync`), without reconnecting;
+- optional client-only deployment (`server.enabled: false`): upstream/host
+  routing with no VPN server of its own.
 
 ## Routing
 
@@ -131,7 +139,9 @@ Also supported:
 
 - host-traffic routing (full/split), independent of the client-facing mode;
 - per-upstream-profile targeted routes/domains, each with its own fwmark/table/kill-switch,
-  regardless of which profile is active.
+  regardless of which profile is active;
+- host DNS handoff to the built-in dnsmasq (`routing.host_dns`: `resolv_conf`/`resolved`),
+  so domain-based host routing applies to the host's own lookups too.
 
 ## GUI pages
 

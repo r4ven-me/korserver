@@ -258,8 +258,11 @@ setup/confirm/disable flow.
     `routes`/`domains` — each gets its own auto-derived fwmark/table
     (`routing.fwmark`/`table_id` + a per-target offset, 1, 2, 3... in
     profile list order, zero-padded to match the configured fwmark's width),
-    its own nftables sets (`split_v4_<profile>`/`split_v6_<profile>`) fed by
-    dnsmasq for its domains, and its own kill switch — unconditional even if
+    its own pair of nftables sets per family (`split_v4_<profile>_static`/
+    `_dynamic`, and the `_v6` equivalent) — `_static` holds this target's
+    config-known `routes`, `_dynamic` is fed by dnsmasq for its `domains` and
+    is never touched by a routes/domains-only reload (see
+    `NftablesService._apply_ruleset`) — and its own kill switch — unconditional even if
     that profile itself is currently disabled/not dialed, since traffic
     explicitly assigned to it should never silently leak out a different
     path. These targeted profiles only exist at all when `upstream.enabled`
@@ -275,6 +278,21 @@ setup/confirm/disable flow.
     and avoids special-casing "is this profile currently the default" in
     `list_targets()`. Configured from the Upstream tab's profile editor
     ("Target routes"/"Target domains" fields).
+  - **Per-profile HOST routing** (`route_host_enabled`/`host_routes`/
+    `host_domains`, `services/upstream_pushed.py`): the same idea as the
+    client-side targeting above, but for this host's own traffic, on its own
+    toggle/lists, independent of the global `routing.host_traffic`/
+    `host_mode` and of whether this box runs a VPN server at all
+    (`server.enabled: false` is a supported "client-only" deployment).
+    `accept_server_routes` additionally merges in whatever the upstream
+    pushes at connect time (`route =`/`split-dns =`), resolved through the
+    upstream's own DNS; `sync_url`/`sync_interval` re-polls the upstream's
+    `GET /api/client/routing` (see "Client routing sync" below) on the live
+    tunnel to refresh those pushed lists without reconnecting.
+    `routing.host_dns` (`services/host_dns.py`) optionally points this
+    host's own resolver at the project-owned dnsmasq, via a bind-mounted
+    `/etc/resolv.conf` or a `systemd-resolved` drop-in, so the domains above
+    apply to the host's own lookups too.
 - `upstream.check_interval`/`check_threshold`/`failover` drive a supervised
   watchdog (`[program:upstream-watchdog]`, `korctl upstream watch`) that pings
   the active profile's `check_host` **through the tunnel interface**
@@ -335,7 +353,11 @@ inside `server.ipv4_network` that occtl reports as an active session — and
 receives only its own effective routing (server `routes`/`search_domains`,
 the user's config-per-group files, the per-user config) plus a version hash.
 korclient polls it through the tunnel and applies changes live without
-reconnecting.
+reconnecting. A korserver acting as an outbound client polls the same endpoint
+on the *upstream* korserver, the same way, when a profile sets `sync_url`
+(`upstream.profiles[].sync_url`/`sync_interval`, see "Middle-server mode"
+above) — the identification and versioning are identical either way, only the
+caller differs.
 
 ## Control surfaces
 
