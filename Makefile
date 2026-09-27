@@ -62,7 +62,7 @@ docker-release: docker-build docker-tag docker-push
 
 release: test
 	$(GIT) add -A
-	$(GIT) commit -m "$(MSG)"
+	$(GIT) diff --cached --quiet || $(GIT) commit -m "$(MSG)"
 	$(GIT) push
 	$(MAKE) git-tag
 	$(MAKE) docker-release
