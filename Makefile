@@ -1,4 +1,4 @@
-.PHONY: help install test lint typecheck check render docker-build docker-tag docker-push docker-release docker-test docker-cli-check frontend-install frontend-build frontend-test frontend-e2e frontend-audit release
+.PHONY: help install test lint typecheck check render docker-build git-tag docker-tag docker-push docker-release docker-test docker-cli-check frontend-install frontend-build frontend-test frontend-e2e frontend-audit release
 
 PYTHON ?= $(shell if [ -x .venv/bin/python ]; then printf '%s' '.venv/bin/python'; else printf '%s' 'python'; fi)
 NPM ?= npm
@@ -11,7 +11,7 @@ GHCR_IMAGE ?= ghcr.io/r4ven-me/korserver
 MSG ?= Release v$(VERSION)
 
 help:
-	@printf '%s\n' 'Targets: install test lint typecheck check render docker-build docker-tag docker-push docker-release docker-test docker-cli-check frontend-install frontend-build frontend-test frontend-e2e frontend-audit release'
+	@printf '%s\n' 'Targets: install test lint typecheck check render docker-build git-tag docker-tag docker-push docker-release docker-test docker-cli-check frontend-install frontend-build frontend-test frontend-e2e frontend-audit release'
 	@printf '%s\n' 'Korvus Client lives in its own repository: https://github.com/r4ven-me/korclient'
 
 install:
@@ -34,6 +34,18 @@ render:
 docker-build:
 	$(DOCKER) build -t $(IMAGE):latest .
 
+git-tag:
+	@if $(GIT) rev-parse -q --verify "refs/tags/v$(VERSION)" >/dev/null; then \
+		echo "Tag v$(VERSION) already exists locally, recreating it"; \
+		$(GIT) tag -d "v$(VERSION)"; \
+	fi
+	@if $(GIT) ls-remote --exit-code --tags origin "refs/tags/v$(VERSION)" >/dev/null 2>&1; then \
+		echo "Tag v$(VERSION) already exists on origin, deleting it there too"; \
+		$(GIT) push origin ":refs/tags/v$(VERSION)"; \
+	fi
+	$(GIT) tag "v$(VERSION)"
+	$(GIT) push origin "v$(VERSION)"
+
 docker-tag:
 	$(DOCKER) tag $(IMAGE):latest $(REMOTE_IMAGE):latest
 	$(DOCKER) tag $(IMAGE):latest $(REMOTE_IMAGE):v$(VERSION)
@@ -52,6 +64,7 @@ release: test
 	$(GIT) add -A
 	$(GIT) commit -m "$(MSG)"
 	$(GIT) push
+	$(MAKE) git-tag
 	$(MAKE) docker-release
 
 docker-test:
